@@ -9,6 +9,7 @@ __version__ = "0.1.0"
 import argparse
 import subprocess
 import shutil, sys, os
+from Bio.Seq import Seq
 from datetime import datetime
 
 # Tracking time of analysis
@@ -27,6 +28,12 @@ requiredArgs.add_argument('-i', '--input_dir', required=True, metavar='',
 						   help="Path of the input directory that contains the raw data.\nBoth forward and reverse reads are expected to be found\nin this directory.")
 # Number of threads/CPUs to be used
 parser.add_argument('-th', '--threads', dest='threads', default=1, metavar='', 
+                	help="Number of threads to be used in the analysis")
+# Number of threads/CPUs to be used
+parser.add_argument('-fp', '--forwardPrimer', default="GTGCCAGCCGCCGCGGTAA", required=False, metavar='', 
+                	help="Number of threads to be used in the analysis")
+# Number of threads/CPUs to be used
+parser.add_argument('-rp', '--reversePrimer', default="GGACTACACGGGTATCTAAT", required=False, metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Display the version of the pipeline 
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {0}'.format(__version__))
@@ -52,18 +59,21 @@ analysisDir = os.path.join(args.output_dir if args.output_dir else os.getcwd(), 
 preprocessedFiles = os.path.join(analysisDir, "preprocessed_files")  # Save processed fastq files
 reportsFolder = os.path.join(analysisDir, "reports")  # Reports folders
 # Secondary subfolders
-preprocessingReports = os.path.join(reportsFolder, "preprocessing_reports")
-trimmingReports = os.path.join(preprocessingReports, "trimming_reports")
 temp = os.path.join(preprocessedFiles, "temp")
+preprocessingReports = os.path.join(reportsFolder, "preprocessing_reports")
+
 
 # Generation of the folders
-for files in [preprocessedFiles, preprocessingReports, trimmingReports, temp]:
+for files in [preprocessedFiles, preprocessingReports, temp]:
 	if not os.path.exists(files): os.makedirs(files)
+
 
 def assess_input_data(input_directory):
 	""" In this function the PE input data will be assesses for valid format and 
 	for correct pairing. """
 	input_files = []  # Output list that will contain the paired-input files
+	forwardReads = []
+	reverseReads = []
 	for path, subdirs, files in os.walk(input_directory):
 		for name in files:
 			# Checking the format of the reads
@@ -77,9 +87,11 @@ def assess_input_data(input_directory):
 				inR2 = inR1.replace("_R1_","_R2_")
 				assert (os.path.isfile(inR2)), 'Could not detect the pair of {0} ({1})'.format(inR1, inR2)
 				input_files.append((inR1, inR2))
+				forwardReads.append(inR1)
+				reverseReads.append(inR2)
 	return input_files
 
-def mild_quality_trimming(forwardRead, reverseRead, i, totNum):
+def mildQualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 	""" An initial very mild base quality trimming will be performed. In this step, we are trying to 
 	discard very troublesome bases (whos quality is below Q18). That way we remove obvious trash and 
 	trying to improve the chances of a proper merge. """
@@ -90,23 +102,63 @@ def mild_quality_trimming(forwardRead, reverseRead, i, totNum):
 						 if reverseRead.endswith(x)][0], "_mtrim.fq.gz"))
 	cutadapt = ' '.join([
 	"cutadapt",  # Call Cutadapt to preprocess the raw data
-	"--cores", str(args.threads),  # Number of CPU cores to use
-	"--quality-cutoff", "18",  # Trim low-quality bases from 5' end of each read ()
+	"--cores", str(args.threads),  # Number of CPUs to use
 	"--max-n", "0.20",  # Discard reads with more than 20% 'N' bases
 	"--trim-n",  # Trim N's on ends of reads
+	"--minimum-length", "20",  # Discard reads shorter than 20 bases
+	"--quality-cutoff", "18, 18",  # Trim low-quality bases from 5' and 3' end of each read (Q<18)
+	"--overlap", (len(args.forwardPrimer)-4), # Min overlap between read and adapter for an adapter to be found
+	"--adapter", "{0}...{1}".format(args.forwardPrimer, str(args.reversePrimer).reverse_complement()),  # R1 linked adapter FWDPRIMER...RCREVPRIMER
+	"-A", "{0}...{1}".format(args.reversePrimer, str(args.forwardPrimer).reverse_complement()),  # R2 linked adapter REVPRIMER...RCFWDPRIMER
+	"--discard-untrimmed",  # Discard reads that do not contain a primer
 	"--output", forwardRead_output,  # Export edited forward read to file
 	"--paired-output", reverseRead_output,  # Export edited reverse read to file
 	forwardRead,  # Input of the forward file
 	reverseRead,  # Input of the reverse file
-	"|", "tee", os.path.join(trimmingReports, "cutadapt_mildQtrim_report.txt")])  # Output trimming report
-	subprocess.run(cutadapt, shell=True)
+	"|", "tee", os.path.join(preprocessingReports, "cutadapt_mildQtrim_report.txt")])  # Output trimming report
+	print(cutadapt)
+	# subprocess.run(cutadapt, shell=True)
 	return 
 
-def pairEndMerge():
+def denoiding_reads():
+	""" """
+	# subprocess.run("conda activate qiime2-2018.11", shell=True)  # To activate Qiime2 environment
+	# denoising = ' '.join([
+	# "qiime dada2 denoise-paired",  # Call qiime dada2 to denoise the raw data
+	# "--p-n-threads", args.threads,  # Number of threads to use
+	# "--p-trunc-len-f", ,
+	# "--p-trunc-len-r", , 
+	# "--i-demultiplexed-seqs", inputDir,  # Trim low-quality bases from 5' end of each read ()
+	# "--output-dir", temp,  # Output results to a directory
+	# "|", "tee", os.path.join(preprocessingReports, "dada2_denoising_report.txt")])  # Output trimming report
+	# subprocess.run(denoising, shell=True)
+	# subprocess.run("conda deactivate", shell=True)  # To deactivate Qiime2 environment
+	return
 
+def pairEndMerge():
+	# bbmerge-auto.sh 
+	# in1=Sample_L001_R1_001.fastq.gz 
+	# in2=Sample_L001_R2_001.fastq.gz 
+	# out=merged/Sample.extendedFrags.fastq.gz 
+	# outu1=merged/Sample.notCombined_1.fastq.gz 
+	# outu2=merged/Sample.notCombined_2.fastq.gz 
+	# qtrim2=
+	# trimq=10,20,30 
+	# ordered=t 
+	# ftm=5
 
 	return
 
+def quiime2():
+	#
+	# To activate this environment, use
+	#
+	#     $ conda activate qiime2-2018.11
+	#
+	# To deactivate an active environment, use
+	#
+	#     $ conda deactivate
+	return 
 
 def main():
 
@@ -116,11 +168,12 @@ def main():
 
 	## Preprocessing of the input data
 	
-	# Performing mild quality trimming
+	# Performing mild quality trimming and 
+	# removal of all primers on both reads
 	for i, read in enumerate(pairedReads):
-		mild_quality_trimming(read[0], read[1], i, totNum) 
+		mildQualityTrimming_primerRemoval(read[0], read[1], i, totNum) 
 
-	pairEndMerge()  # Merging the pair files
+	# pairEndMerge()  # Merging the pair files
 
 	## OTU analysis 
 
