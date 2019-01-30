@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/bin/bash
 
 ### Creator n' Maintainer Stavros Giannoukakos
 ### University of Granada
@@ -9,8 +9,8 @@ __version__ = "0.1.0"
 import argparse
 import subprocess
 from Bio.Seq import Seq
-import shutil, glob, sys, os
 from datetime import datetime
+import shutil, fnmatch, glob, sys, os
 
 # Tracking time of analysis
 start_time = datetime.now()
@@ -27,7 +27,7 @@ requiredArgs = parser.add_argument_group('required arguments')
 requiredArgs.add_argument('-i', '--input_dir', required=True, metavar='', 
 						   help="Path of the input directory that contains the raw data.\nBoth forward and reverse reads are expected to be found\nin this directory.")
 # Number of threads/CPUs to be used
-parser.add_argument('-th', '--threads', dest='threads', default=1, metavar='', 
+parser.add_argument('-th', '--threads', dest='threads', default=40, metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Number of threads/CPUs to be used
 parser.add_argument('-fp', '--forwardPrimer', default="GTGCCAGCMGCCGCGGTAA", required=False, metavar='', 
@@ -60,7 +60,7 @@ preprocessedFiles = os.path.join(analysisDir, "preprocessed_files")  # Save proc
 reportsDir = os.path.join(analysisDir, "reports")  # Reports folders
 # Secondary subfolders
 temp = os.path.join(preprocessedFiles, "temp")
-qiimeImportedDir = os.path.join(preprocessedFiles, "qiime2_inputDir")
+qiimeDir = os.path.join(preprocessedFiles, "qiime2")
 preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
 
 # Generation of the folders
@@ -79,24 +79,25 @@ def assess_input_data(input_directory):
 			if not name.endswith((".fastq.gz", ".fq.gz")):  
 				sys.exit('Unidentified input format in read: {0}'.format(name))
 			# Verifying that all reads have their pairs
-			elif not any(x in name.upper() for x in ["_R1", "_R2"]):
+			elif not any(x in name.upper() for x in ["_R1_", "_R2_"]):
 				sys.exit('Unidentified member of a pair in read: {0}'.format(name))  
-			elif "_R1" in name:  # Obtaining the paired-input files
+			elif "_R1_" in name:  # Obtaining the paired-input files
 				inR1 = os.path.join(os.path.abspath(path), name)
-				inR2 = inR1.replace("_R1","_R2")
+				inR2 = inR1.replace("_R1_","_R2_")
 				assert (os.path.isfile(inR2)), 'Could not detect the pair of {0} ({1})'.format(inR1, inR2)
 				input_files.append((inR1, inR2))
 	return input_files
+
 
 def mildQualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 	""" An initial very mild base quality trimming will be performed. In this step, we are trying to 
 	discard very troublesome bases (whos quality is below Q18). That way we remove obvious trash and 
 	trying to improve the chances of a proper merge. """
-	# print("{0}/{1}. Mild base quality filtering in {2}".format((i+1), totNum, os.path.basename(forwardRead.split("_")[-1])))
+	print("{0}/{1}. Mild base quality filtering in {2}".format((i+1), totNum, os.path.basename(forwardRead.split("_")[-1])))
 	forwardRead_output = os.path.join(temp, os.path.basename(forwardRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
-						 if forwardRead.endswith(x)][0], ".mtrnopr.fq.gz"))
+						 if forwardRead.endswith(x)][0], ".fastq.gz"))
 	reverseRead_output = os.path.join(temp, os.path.basename(reverseRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
-						 if reverseRead.endswith(x)][0], ".mtrnopr.fq.gz"))
+						 if reverseRead.endswith(x)][0], ".fastq.gz"))
 	cutadapt = ' '.join([
 	"cutadapt",  # Call Cutadapt to preprocess the raw data
 	"--cores", str(args.threads),  # Number of CPUs to use
@@ -121,16 +122,16 @@ def mildQualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 def quality_control():
 	""" Running fastQC to make a preliminary quality check of the processed PE reads. Then
 	MultiQC will summarise the QC reports from all samples into a summary report """
-	# mfiltered_data = ' '.join([f for f in glob.glob(os.path.join(temp, "*.mttnopr.fq.gz"))])
-	# mfiltered_data = ' '.join([f for f in glob.glob(os.path.join(temp, "*mtrnopr.fq.gz"))])
-	# fastQC = ' '.join([
-	# "fastqc",  # Call fastQC to quality contol all processed data
-	# "--threads", str(args.threads),  # Number of threads to use
-	#"--quiet",  # Print only log warnings
-	# "--outdir", preprocessingReports,  # Create all output files in this specified output directory
-	# mfiltered_data,  # String containing all samples that are about to be checked
-	# "|", "tee", "--append", os.path.join(preprocessingReports, "fastQC_preCQ_report.txt")])  # Output fastQC report
-	# subprocess.run(fastQC, shell=True) 
+	mfiltered_data = ' '.join([f for f in glob.glob(os.path.join(temp, "*.fastq.gz"))])
+	print("Quality Control reports for the data are being generated: in progress ..")
+	fastQC = ' '.join([
+	"fastqc",  # Call fastQC to quality contol all processed data
+	"--threads", str(args.threads),  # Number of threads to use
+	"--quiet",  # Print only log warnings
+	"--outdir", preprocessingReports,  # Create all output files in this specified output directory
+	mfiltered_data,  # String containing all samples that are about to be checked
+	"|", "tee", "--append", os.path.join(preprocessingReports, "fastQC_preCQ_report.txt")])  # Output fastQC report
+	subprocess.run(fastQC, shell=True) 
 
 	multiQC = " ".join([
 	"multiqc",  # Call MultiQC
@@ -141,33 +142,48 @@ def quality_control():
 	"|", "tee", "--append", os.path.join(preprocessingReports, "multiQC_report.txt")])  # Output multiQC report
 	subprocess.run(multiQC, shell=True)
 
-	os.system('mv %s/*_trimming_report.txt %s' %(preprocessingReports, trimmingReports))  # Moving trimming reports to trimming_reports folder
-	os.system('mv %s/*fastqc.zip %s' %(preprocessingReports, temp))  # Moving all 'fastqc.zip' temporary files to temp folder
-	os.system('mv  %s/summarised_report_data %s' %(reportsFolder, temp))  # Moving MultiQC temporary files to temp folder
-	os.system("chmod 755 -R {0}".format(preprocessedFiles))
+	os.system('rm {0}/*fastqc.zip'.format(preprocessingReports))  # Removing all 'fastqc.zip' temporary files
+	# os.system("chmod 755 -R {0}".format(preprocessedFiles))
 	
 	return
 
-def denoidingAndMerning_reads():
-	""" """
-	# subprocess.run("conda activate qiime2-2018.11", shell=True)  # To activate Qiime2 environment
-	# importingSamplesToQiime2 =	' '.join([
-	# "qiime tools import",
-	# "--type", "SampleData[SequencesWithQuality]",
-	# "--source-format", "SingleEndFastqManifestPhred33",
-	# "--input-path", temp, 
-	# "--output-path", qiimeImportedDir])
+def create_manifest():
+	reads = glob.glob(os.path.join(temp, "*_R1_*.gz"))
+	manifest = os.path.join(qiimeDir, "manifest.csv")
+	with open(manifest, "w") as fout:
+		fout.write("sample-id,absolute-filepath,direction\n")
+		for entries in reads:
+			sample_id = os.path.basename(entries).split("_")[0]
+			fout.write("{0},{1},forward\n{0},{2},reverse\n".format(sample_id, entries, entries.replace("_R1_", "_R2_")))
+	return manifest
 
-	# denoising = ' '.join([
-	# "qiime dada2 denoise-paired",  # Call qiime dada2 to denoise the raw data
-	# "--p-n-threads", args.threads,  # Number of threads to use
-	# "--p-trunc-len-f", ,
-	# "--p-trunc-len-r", , 
-	# "--i-demultiplexed-seqs", inputDir,  # Trim low-quality bases from 5' end of each read ()
-	# "--output-dir", temp,  # Output results to a directory
-	# "|", "tee", os.path.join(preprocessingReports, "dada2_denoising_report.txt")])  # Output trimming report
-	# subprocess.run(denoising, shell=True)
-	# subprocess.run("conda deactivate", shell=True)  # To deactivate Qiime2 environment
+def denoidingAndMerning_reads():
+	""" Importing and denoising the preprocessed PE reads """
+	manifest = create_manifest()
+	# subprocess.run('/bin/bash activate qiime2-2018.11', shell=True)  # To activate Qiime2 environment
+	importingSamplesToQiime2 =	' '.join([
+	"qiime tools import",  # Run QIIME IMPORT to import data and create a new QIIME 2 Artifact
+	"--type", "\'SampleData[PairedEndSequencesWithQuality]\'",  # The semantic type of the artifact that will be created upon importing
+	"--input-format", "CasavaOneEightSingleLanePerSampleDirFmt",
+	"--input-path", temp,  # Path to the directory that should be imported
+	"--output-path", os.path.join(qiimeDir, "mqualitrim_noprim_pe_data.qza")])  # Path where output artifact should be written
+	# subprocess.run(importingSamplesToQiime2, shell=True)
+
+	denoising = ' '.join([
+	"qiime dada2 denoise-paired",  # Call qiime dada2 to denoise the preprocessed data
+	"--p-n-threads", args.threads,  # Number of threads to use
+	"--p-trunc-len-f", ,
+	"--p-trunc-len-r", , 
+	"--output-dir", qiimeDir,  # Output results to a directory
+	"--o-table", "table.qza",
+	"--o-denoising-stats", "denoising-stats.qza",
+	"--o-representative-sequences", "rep-seqs.qza",
+	"--i-demultiplexed-seqs", os.path.join(qiimeDir, "mqualitrim_noprim_pe_data.qza"),  # The paired-end demultiplexed sequences to be denoised
+	"|", "tee", os.path.join(preprocessingReports, "dada2_denoising_report.txt")])  # Output trimming report
+	subprocess.run(denoising, shell=True)
+
+  # --p-trunc-len-f 150 \
+  # --p-trunc-len-r 150 \
 
 
 
@@ -194,13 +210,14 @@ def main():
 	
 	# Performing mild quality trimming and 
 	# removal of all primers on both reads
-	# for i, read in enumerate(pairedReads):
-	# 	mildQualityTrimming_primerRemoval(read[0], read[1], i, totNum) 
+	for i, read in enumerate(pairedReads):
+		mildQualityTrimming_primerRemoval(read[0], read[1], i, totNum) 
 
 	quality_control()  # Checking the quality of the merged reads
-	# pairEndMerge()  # Merging the pair files
+	
+	denoidingAndMerning_reads()  # Merging the pair files
 
-	# denoidingAndMerning_reads()
+	
 	
 	## OTU analysis 
 
