@@ -81,7 +81,7 @@ preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
 analysisReports = os.path.join(reportsDir, "analysis_reports")
 
 # Generation of the directories
-for files in [temp, filteredDir, preprocessingReports, analysisReports]:
+for files in [temp, qiimeDir, filteredDir, preprocessingReports, analysisReports]:
 	if not os.path.exists(files): os.makedirs(files)
 
 
@@ -109,9 +109,9 @@ def mildQualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 	""" An initial very mild base quality trimming will be performed. In this step, we are trying to 
 	discard very troublesome bases (whos quality is below Q15). That way we remove obvious trash and 
 	trying to improve the chances of a proper merge. """
-	forwardRead_output = os.path.join(temp, os.path.basename(forwardRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
+	forwardRead_output = os.path.join(filteredDir, os.path.basename(forwardRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
 						 if forwardRead.endswith(x)][0], ".fastq.gz"))
-	reverseRead_output = os.path.join(temp, os.path.basename(reverseRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
+	reverseRead_output = os.path.join(filteredDir, os.path.basename(reverseRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
 						 if reverseRead.endswith(x)][0], ".fastq.gz"))
 	
 	print("{0}/{1}. Mild base quality filtering in {2}".format((i+1), totNum, os.path.basename(forwardRead.split("_")[-1])))
@@ -140,7 +140,7 @@ def quality_control():
 	Additionally, use AfterQC to make a preliminary quality check of the processed PE reads. 
 	Then MultiQC  will summarise the QC reports from  all samples into a summary report """
 	# Obtaining the preprocessed reads
-	mfiltered_data = ' '.join([f for f in glob.glob(os.path.join(temp, "*R1*.fastq.gz"))])
+	mfiltered_data = ' '.join([f for f in glob.glob(os.path.join(filteredDir, "*R1*.fastq.gz"))])
 
 	print("Checking random reads for possible contamination: in progress ..")
 	fastQscreen = ' '.join([
@@ -156,9 +156,9 @@ def quality_control():
 	print("Quality Control reports for the following data are being generated: in progress ..")
 	afterQC = ' '.join([
 	"after.py",  # Call fastQC to quality control all processed data
-	"--input_dir", temp,  # Input directory to be process automatically
-	"--good_output_folder", filteredDir,  # Storing good reads
-	"--bad_output_folder", filteredDir,  # Storing bad reads
+	"--input_dir", filteredDir,  # Input directory to be process automatically
+	"--good_output_folder", temp,  # Storing good reads
+	"--bad_output_folder", temp,  # Storing bad reads
 	"--report_output_folder", preprocessingReports,  # Create all output files in this specified output directory
 	"|", "tee", "--append", os.path.join(preprocessingReports, "afterQC_report.txt")])  # Output fastQC report
 	subprocess.run(afterQC, shell=True) 
@@ -177,66 +177,86 @@ def quality_control():
 	# os.system("chmod 755 -R {0}".format(preprocessedFiles))	
 	return
 
-def otu_analysis():
+def otu_mainAnalysis():
 	""" Importing and denoising the preprocessed PE reads """
-	print("Importing the preprocessed reads to the Qiime2 Artifact: in progress ..")
+	# print("Importing the preprocessed reads to the Qiime2 Artifact: in progress ..")
 	importingSamplesToQiime2 =	' '.join([
 	"qiime tools import",  # Run QIIME IMPORT to import data and create a new QIIME 2 Artifact
 	"--type", "\'SampleData[PairedEndSequencesWithQuality]\'",  # The semantic type of the artifact that will be created upon importing
 	"--input-format", "CasavaOneEightSingleLanePerSampleDirFmt",
-	"--input-path", temp,  # Path to the directory that should be imported
+	"--input-path", filteredDir,  # Path to the directory that should be imported
 	"--output-path", os.path.join(qiimeDir, "input_data.qza"),  # Path where output artifact should be written
 	"|", "tee", os.path.join(reportsDir, "qiime2_importingData_report.txt")])  # Output denoising report
 	# subprocess.run(importingSamplesToQiime2, shell=True)
 
-	print("Denoising, dereplicating and filtering chimera sequences from the paired-end data: in progress ..")
+
+	""" Denoising is an attempt to correct reads with sequencing errors and then 
+	remove chimeric sequences originating from different DNA templates."""
+	# print("Denoising, dereplicating and filtering chimera sequences from the paired-end data: in progress ..")
 	denoisingNmerging = ' '.join([
 	"qiime dada2 denoise-paired",  # Call qiime dada2 to denoise the preprocessed data
 	"--p-n-threads", str(args.threads),  # Number of threads to use
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--p-trunc-len-f", "0",  # No truncation will be performed cause we have already trimmed low quality ends
 	"--p-trunc-len-r", "0",  # No truncation will be performed cause we have already trimmed low quality ends
 	"--output-dir", qiimeResults,  # Output results to a directory
 	"--i-demultiplexed-seqs", os.path.join(qiimeDir, "input_data.qza"),  # The paired-end demultiplexed sequences to be denoised
 	"|", "tee", os.path.join(reportsDir, "dada2_denoising_report.txt")])  # Output denoising report
 	# subprocess.run(denoisingNmerging, shell=True)
-	
-	""" At this stage, you will have artifacts containing the feature table and corresponding feature sequences. 
-	Now we will generate summary of the above features. """
+
+	""" At this stage, we have obtained the artifacts containing the feature table and corresponding feature sequences. 
+	Now we will generate summary of the above features and proceed with visualisation of the data. """
 	featureTableSummary = ' '.join([
 	"qiime feature-table summarize",  # Calling qiime2 feature-table summarize function
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--i-table", os.path.join(qiimeResults, "table.qza"),  # The feature table to be summarized
 	"--o-visualization", os.path.join(qiimeDir, "featureTable.qzv"),  # Output results to directory
 	# "--m-sample-metadata-file", os.path.join(qiimeDir, "sample-metadata.tsv"),  # Metadata file
 	"|", "tee", os.path.join(preprocessingReports, "qiime_featureTableSummary_report.txt")])  # Output featureTableSummary report
-	subprocess.run(featureTableSummary, shell=True)
+	# subprocess.run(featureTableSummary, shell=True)
 	
 	featureIdentifierToSeqMapping = ' '.join([
-	"qiime feature-table tabulate-seqs",  # Calling qiime2 feature-table tabulate-seqs function 
+	"qiime feature-table tabulate-seqs",  # Calling qiime2 feature-table tabulate-seqs function
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--i-data", os.path.join(qiimeResults, "representative_sequences.qza"),  # The feature sequences to be tabulated
 	"--o-visualization", os.path.join(qiimeResults, "representative_sequences.qzv"),  # Output file
 	"|", "tee", os.path.join(preprocessingReports, "qiime_featureIdentifierToSeqMapping_report.txt")])  # Output featureIdentifierToSeqMapping report
-	subprocess.run(featureIdentifierToSeqMapping, shell=True)
+	# subprocess.run(featureIdentifierToSeqMapping, shell=True)
+	
 
-
-	print("Visualisation of the basic statistics regarding the denoising process: in progress ..")
+	# print("Visualisation of the basic statistics regarding the denoising process: in progress ..")
 	visualisationOfDenoisingStats = ' '.join([
 	"qiime metadata tabulate",  # Calling qiime2 metadata tabulate function
   	"--m-input-file", os.path.join(qiimeResults, "denoising_stats.qza"),  # Metadata input file
   	"--o-visualization", os.path.join(qiimeResults, "denoising-stats.qzv"),  # Output visualization file 
   	"|", "tee", os.path.join(reportsDir, "dada2_visualisationOfDenoisingStats_report.txt")])  # Output denoising report
-	subprocess.run(visualisationOfDenoisingStats, shell=True)
+	# subprocess.run(visualisationOfDenoisingStats, shell=True)
 	
 
+
 	######################
-	# os.path.join(qiimeDir, "mqualitrim_noprim_pe_data.qza")
 	#### add visualisation and extraction of stats
 	#####################
 
-	# qiime feature-table filter-features 
-	# "-i-table" "trimmed/DADA2/table-dada2.qza"
-	# "-p-min-frequency", "10" 
-	# "-o-filtered-table","trimmed/DADA2/dada2-feature-frequency-filtered-table.qza"
+	""" Applying basic filters for how frequent a variant needs to be """
+	filteringVariant = ' '.join([
+	"qiime feature-table filter-features",  # Calling qiime2 feature-table filter-features function
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"-i-table", os.path.join(qiimeResults, "table.qza"),  # Input feature table
+	"-p-min-frequency", "10"  # Minimum observed frequency of a 
+	"-o-filtered-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  #
+	"|", "tee", os.path.join(reportsDir, "qiime2_filteringVariant_report.txt")])  # Output denoising report
+	# subprocess.run(filteringVariant, shell=True)
 
+	""" Generate a heatmap representation of the filtered feature table """
+	filteredFeaturesHeatmap = ' '.join([
+	"qiime feature-table heatmap",  # Calling qiime2 feature-table heatmap function
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--p-color-scheme", "Paired",  # The color scheme of the heatmap  
+	"--i-data", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # The input filtered feature table
+	"--output-dir", qiimeResults,  # Output directory
+	"|", "tee", os.path.join(preprocessingReports, "qiime_filteredFeaturesHeatmap_report.txt")])  # Output filteredFeaturesHeatmap report
+	# subprocess.run(filteredFeaturesHeatmap, shell=True)
 	return 
 
 def main():
@@ -256,7 +276,7 @@ def main():
 	"""
 
 	## OTU analysis 
-	otu_analysis()  # This function hosts the main otu analysis
+	otu_mainAnalysis()  # This function hosts the main otu analysis
 	
 
 	## Downstream analysis
