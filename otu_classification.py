@@ -189,6 +189,13 @@ def otu_mainAnalysis():
 	"|", "tee", os.path.join(reportsDir, "qiime2_importingData_report.txt")])  # Output denoising report
 	# subprocess.run(importingSamplesToQiime2, shell=True)
 
+	importSamplesQC =	' '.join([
+	"qiime demux summarize",  # Calling qiime demux summarize to quality of each sample
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--i-data", os.path.join(qiimeDir, "input_data.qza"),  # Path where the input artifact is written
+	"--o-visualization", os.path.join(preprocessingReports, "inputData_QC.qzv"),  # Output reports
+	"|", "tee", os.path.join(reportsDir, "qiime2_importSamplesQC_report.txt")])  # Output importSamplesQC report
+	# subprocess.run(importSamplesQC, shell=True)
 
 	""" Denoising is an attempt to correct reads with sequencing errors and then 
 	remove chimeric sequences originating from different DNA templates."""
@@ -212,7 +219,7 @@ def otu_mainAnalysis():
 	"--i-table", os.path.join(qiimeResults, "table.qza"),  # The feature table to be summarized
 	"--o-visualization", os.path.join(qiimeDir, "featureTable.qzv"),  # Output results to directory
 	# "--m-sample-metadata-file", os.path.join(qiimeDir, "sample-metadata.tsv"),  # Metadata file
-	"|", "tee", os.path.join(preprocessingReports, "qiime_featureTableSummary_report.txt")])  # Output featureTableSummary report
+	"|", "tee", os.path.join(preprocessingReports, "qiime2_featureTableSummary_report.txt")])  # Output featureTableSummary report
 	# subprocess.run(featureTableSummary, shell=True)
 	
 	featureIdentifierToSeqMapping = ' '.join([
@@ -220,7 +227,7 @@ def otu_mainAnalysis():
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--i-data", os.path.join(qiimeResults, "representative_sequences.qza"),  # The feature sequences to be tabulated
 	"--o-visualization", os.path.join(qiimeResults, "representative_sequences.qzv"),  # Output file
-	"|", "tee", os.path.join(preprocessingReports, "qiime_featureIdentifierToSeqMapping_report.txt")])  # Output featureIdentifierToSeqMapping report
+	"|", "tee", os.path.join(preprocessingReports, "qiime2_featureIdentifierToSeqMapping_report.txt")])  # Output featureIdentifierToSeqMapping report
 	# subprocess.run(featureIdentifierToSeqMapping, shell=True)
 	
 
@@ -229,7 +236,7 @@ def otu_mainAnalysis():
 	"qiime metadata tabulate",  # Calling qiime2 metadata tabulate function
   	"--m-input-file", os.path.join(qiimeResults, "denoising_stats.qza"),  # Metadata input file
   	"--o-visualization", os.path.join(qiimeResults, "denoising-stats.qzv"),  # Output visualization file 
-  	"|", "tee", os.path.join(reportsDir, "dada2_visualisationOfDenoisingStats_report.txt")])  # Output denoising report
+  	"|", "tee", os.path.join(reportsDir, "qiime2_visualisationOfDenoisingStats_report.txt")])  # Output denoising report
 	# subprocess.run(visualisationOfDenoisingStats, shell=True)
 	
 
@@ -242,9 +249,9 @@ def otu_mainAnalysis():
 	filteringVariant = ' '.join([
 	"qiime feature-table filter-features",  # Calling qiime2 feature-table filter-features function
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
-	"-i-table", os.path.join(qiimeResults, "table.qza"),  # Input feature table
-	"-p-min-frequency", "10"  # Minimum observed frequency of a 
-	"-o-filtered-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  #
+	"--i-table", os.path.join(qiimeResults, "table.qza"),  # Input feature table
+	"--p-min-frequency", "10",  # Minimum observed frequency of a 
+	"--o-filtered-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  #
 	"|", "tee", os.path.join(reportsDir, "qiime2_filteringVariant_report.txt")])  # Output denoising report
 	# subprocess.run(filteringVariant, shell=True)
 
@@ -252,11 +259,12 @@ def otu_mainAnalysis():
 	filteredFeaturesHeatmap = ' '.join([
 	"qiime feature-table heatmap",  # Calling qiime2 feature-table heatmap function
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
-	"--p-color-scheme", "Paired",  # The color scheme of the heatmap  
-	"--i-data", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # The input filtered feature table
-	"--output-dir", qiimeResults,  # Output directory
-	"|", "tee", os.path.join(preprocessingReports, "qiime_filteredFeaturesHeatmap_report.txt")])  # Output filteredFeaturesHeatmap report
-	# subprocess.run(filteredFeaturesHeatmap, shell=True)
+	"--p-color-scheme", "Paired",  # The color scheme of the heatmap
+	"--o-visualization", os.path.join(qiimeResults, "filteredFeaturesHeatmap.png"),  # Output directory
+	# "--m-sample-metadata-file", os.path.join(qiimeDir, "sample-metadata.tsv"),  # Metadata file
+	"--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # The input filtered feature table
+	"|", "tee", os.path.join(preprocessingReports, "qiime2_filteredFeaturesHeatmap_report.txt")])  # Output filteredFeaturesHeatmap report
+	subprocess.run(filteredFeaturesHeatmap, shell=True)
 	return 
 
 def main():
