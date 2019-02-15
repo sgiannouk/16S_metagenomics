@@ -38,7 +38,7 @@ requiredArgs = parser.add_argument_group('required arguments')
 requiredArgs.add_argument('-i', '--input_dir', required=True, metavar='', 
 						   help="Path of the input directory that contains the raw data.\nBoth forward and reverse reads are expected to be found\nin this directory.")
 # Number of threads/CPUs to be used
-parser.add_argument('-th', '--threads', dest='threads', default=50, metavar='', 
+parser.add_argument('-th', '--threads', dest='threads', default=20, metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Number of threads/CPUs to be used
 parser.add_argument('-fp', '--forwardPrimer', default="GTGCCAGCMGCCGCGGTAA", required=False, metavar='', 
@@ -46,6 +46,9 @@ parser.add_argument('-fp', '--forwardPrimer', default="GTGCCAGCMGCCGCGGTAA", req
 # Number of threads/CPUs to be used
 parser.add_argument('-rp', '--reversePrimer', default="GGACTACHVGGGTWTCTAAT", required=False, metavar='', 
                 	help="Sequence of the reverse primer")
+# Metadata file
+parser.add_argument('-m', '--metadata', required=False, metavar='', 
+                	help="Metadata file containing several info conserning the\ninput data")
 # Display the version of the pipeline 
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {0}'.format(__version__))
 # Path of where the output folder should be located
@@ -76,12 +79,13 @@ temp = os.path.join(preprocessedFiles, "temp")
 filteredDir = os.path.join(preprocessedFiles, "filtered_data")
 
 qiimeResults = os.path.join(qiimeDir, "denoising_results")
+diversityAnalysis = os.path.join(qiimeDir, "diversity_analysis")
 
 preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
 analysisReports = os.path.join(reportsDir, "analysis_reports")
 
 # Generation of the directories
-for files in [temp, qiimeDir, filteredDir, preprocessingReports, analysisReports]:
+for files in [temp, qiimeDir, diversityAnalysis, filteredDir, preprocessingReports, analysisReports]:
 	if not os.path.exists(files): os.makedirs(files)
 
 
@@ -187,7 +191,7 @@ def otu_mainAnalysis():
 	"--input-path", filteredDir,  # Path to the directory that should be imported
 	"--output-path", os.path.join(qiimeDir, "input_data.qza"),  # Path where output artifact should be written
 	"|", "tee", os.path.join(reportsDir, "qiime2_importingData_report.txt")])  # Output denoising report
-	# subprocess.run(importingSamplesToQiime2, shell=True)
+	subprocess.run(importingSamplesToQiime2, shell=True)
 
 	importSamplesQC =	' '.join([
 	"qiime demux summarize",  # Calling qiime demux summarize to quality of each sample
@@ -195,10 +199,10 @@ def otu_mainAnalysis():
 	"--i-data", os.path.join(qiimeDir, "input_data.qza"),  # Path where the input artifact is written
 	"--o-visualization", os.path.join(preprocessingReports, "inputData_QC.qzv"),  # Output reports
 	"|", "tee", os.path.join(reportsDir, "qiime2_importSamplesQC_report.txt")])  # Output importSamplesQC report
-	# subprocess.run(importSamplesQC, shell=True)
+	subprocess.run(importSamplesQC, shell=True)
 
 	""" Denoising is an attempt to correct reads with sequencing errors and then 
-	remove chimeric sequences originating from different DNA templates."""
+	remove chimeric sequences originating from different DNA templates. """
 	# print("Denoising, dereplicating and filtering chimera sequences from the paired-end data: in progress ..")
 	denoisingNmerging = ' '.join([
 	"qiime dada2 denoise-paired",  # Call qiime dada2 to denoise the preprocessed data
@@ -209,18 +213,18 @@ def otu_mainAnalysis():
 	"--output-dir", qiimeResults,  # Output results to a directory
 	"--i-demultiplexed-seqs", os.path.join(qiimeDir, "input_data.qza"),  # The paired-end demultiplexed sequences to be denoised
 	"|", "tee", os.path.join(reportsDir, "dada2_denoising_report.txt")])  # Output denoising report
-	# subprocess.run(denoisingNmerging, shell=True)
+	subprocess.run(denoisingNmerging, shell=True)
 
 	""" At this stage, we have obtained the artifacts containing the feature table and corresponding feature sequences. 
 	Now we will generate summary of the above features and proceed with visualisation of the data. """
 	featureTableSummary = ' '.join([
 	"qiime feature-table summarize",  # Calling qiime2 feature-table summarize function
+	# "--m-sample-metadata-file", args.metadata,  # Metadata file
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--i-table", os.path.join(qiimeResults, "table.qza"),  # The feature table to be summarized
 	"--o-visualization", os.path.join(qiimeDir, "featureTable.qzv"),  # Output results to directory
-	# "--m-sample-metadata-file", os.path.join(qiimeDir, "sample-metadata.tsv"),  # Metadata file
 	"|", "tee", os.path.join(preprocessingReports, "qiime2_featureTableSummary_report.txt")])  # Output featureTableSummary report
-	# subprocess.run(featureTableSummary, shell=True)
+	subprocess.run(featureTableSummary, shell=True)
 	
 	featureIdentifierToSeqMapping = ' '.join([
 	"qiime feature-table tabulate-seqs",  # Calling qiime2 feature-table tabulate-seqs function
@@ -228,43 +232,90 @@ def otu_mainAnalysis():
 	"--i-data", os.path.join(qiimeResults, "representative_sequences.qza"),  # The feature sequences to be tabulated
 	"--o-visualization", os.path.join(qiimeResults, "representative_sequences.qzv"),  # Output file
 	"|", "tee", os.path.join(preprocessingReports, "qiime2_featureIdentifierToSeqMapping_report.txt")])  # Output featureIdentifierToSeqMapping report
-	# subprocess.run(featureIdentifierToSeqMapping, shell=True)
+	subprocess.run(featureIdentifierToSeqMapping, shell=True)
 	
-
 	# print("Visualisation of the basic statistics regarding the denoising process: in progress ..")
 	visualisationOfDenoisingStats = ' '.join([
 	"qiime metadata tabulate",  # Calling qiime2 metadata tabulate function
   	"--m-input-file", os.path.join(qiimeResults, "denoising_stats.qza"),  # Metadata input file
   	"--o-visualization", os.path.join(qiimeResults, "denoising-stats.qzv"),  # Output visualization file 
   	"|", "tee", os.path.join(reportsDir, "qiime2_visualisationOfDenoisingStats_report.txt")])  # Output denoising report
-	# subprocess.run(visualisationOfDenoisingStats, shell=True)
-	
-
-
-	######################
-	#### add visualisation and extraction of stats
-	#####################
+	subprocess.run(visualisationOfDenoisingStats, shell=True)
 
 	""" Applying basic filters for how frequent a variant needs to be """
 	filteringVariant = ' '.join([
 	"qiime feature-table filter-features",  # Calling qiime2 feature-table filter-features function
+	# "--m-sample-metadata-file", args.metadata,  # Metadata file
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--i-table", os.path.join(qiimeResults, "table.qza"),  # Input feature table
-	"--p-min-frequency", "10",  # Minimum observed frequency of a 
-	"--o-filtered-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  #
+	"--p-min-frequency", "10",  # total frequency that a feature must have to be retained
+	"--p-min-samples", "1",  # The minimum number of samples that a feature must be observed in to be retained
+	"--o-filtered-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # Output file
 	"|", "tee", os.path.join(reportsDir, "qiime2_filteringVariant_report.txt")])  # Output denoising report
-	# subprocess.run(filteringVariant, shell=True)
+	subprocess.run(filteringVariant, shell=True)
 
 	""" Generate a heatmap representation of the filtered feature table """
 	filteredFeaturesHeatmap = ' '.join([
 	"qiime feature-table heatmap",  # Calling qiime2 feature-table heatmap function
+	# "--m-sample-metadata-file", args.metadata,  # Metadata file
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--p-color-scheme", "Paired",  # The color scheme of the heatmap
-	"--o-visualization", os.path.join(qiimeResults, "filteredFeaturesHeatmap.png"),  # Output directory
-	# "--m-sample-metadata-file", os.path.join(qiimeDir, "sample-metadata.tsv"),  # Metadata file
+	"--p-cluster", "features",  # Perform the clusterring based on the features
+	"--o-visualization", os.path.join(qiimeResults, "filteredFeaturesHeatmap"),  # Output directory
 	"--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # The input filtered feature table
 	"|", "tee", os.path.join(preprocessingReports, "qiime2_filteredFeaturesHeatmap_report.txt")])  # Output filteredFeaturesHeatmap report
 	subprocess.run(filteredFeaturesHeatmap, shell=True)
+
+	""" Obtainng the filtered features and sequences """
+	filteredFeaturesSeqs = ' '.join([
+	"qiime feature-table filter-seqs",
+    # "--m-sample-metadata-file", args.metadata,  # Metadata file
+	"--i-data", os.path.join(qiimeResults, "representative_sequences.qza"),  # The sequences from which features should be filtered.
+    "--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # Input table containing feature ids used for id-based filtering
+    "--o-filtered-data", os.path.join(qiimeResults, "representative_sequences_filt.qza"),  # The output filtered sequences
+	"|", "tee", os.path.join(preprocessingReports, "qiime2_filteredFeaturesSeqs_report.txt")])  # Output filteredFeaturesSeqs report
+	subprocess.run(filteredFeaturesSeqs, shell=True)
+
+	filteredFeaturesSummary = ' '.join([
+	"qiime feature-table summarize",  # Calling qiime2 feature-table summarize function
+	# "--m-sample-metadata-file", args.metadata,  # Metadata file
+	"--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # Input feature table to be summarized
+	"--o-visualization", os.path.join(qiimeResults, "feature_frequencyFiltered_SummaryTable.qzv"),  # Output file
+	"|", "tee", os.path.join(preprocessingReports, "qiime2_filteredFeaturesSummary_report.txt")])  # Output filteredFeaturesSummary report
+	subprocess.run(filteredFeaturesSummary, shell=True)
+	return 
+
+def phylogenetic_diversity_analysis():
+	""" This pipeline will start by creating a sequence alignment using MAFFT,
+  	after which any alignment columns that are phylogenetically uninformative
+  	or  ambiguously aligned  will be removed  (masked). The resulting masked
+  	alignment will be used to infer a phylogenetic tree and then subsequently
+  	rooted at its  midpoint. Afterwards, a  collection of diversity metrics 
+  	(both phylogenetic and non-phylogenetic) is being applied to the feature 
+  	table. """
+	phylogeneticDiversityAnalysis =	' '.join([
+	"qiime phylogeny align-to-tree-mafft-fasttree", # Calling qiime2 align-to-tree-mafft-fasttree function
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--p-n-threads", str(args.threads),  # Number of threads to use
+	"--i-sequences", os.path.join(qiimeResults, "representative_sequences_filt.qza"),  # he sequences to be used for creating a phylogenetic tree
+	"--o-alignment", os.path.join(diversityAnalysis, "aligned_reprSeqs.qza"),  # The aligned sequences
+	"--o-masked-alignment", os.path.join(diversityAnalysis, "masked_aligned_reprSeqs.qza"),  # The masked alignment
+	"--o-tree", os.path.join(diversityAnalysis, "unrooted_tree.qza"),  # The unrooted phylogenetic tree
+	"--o-rooted-tree", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
+	"|", "tee", os.path.join(reportsDir, "qiime2_phylogeneticDiversityAnalysis_report.txt")])  # Output phylogeneticDiversityAnalysis report
+	# subprocess.run(phylogeneticDiversityAnalysis, shell=True)
+
+	diversityMetrics =	' '.join([
+	"qiime diversity core-metrics-phylogenetic",  # Calling qiime 2diversity core-metrics-phylogenetic function
+	# "--m-sample-metadata-file", args.metadata,  # Metadata file
+	# "--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--p-n-jobs", str(args.threads), # The number of CPUs to be used for the computation
+	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
+	"--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # The input filtered feature table
+	"--p-sampling-depth", "1109",  # The total frequency that each sample should be rarefied to prior to computing diversity metrics
+	"--output-dir", os.path.join(qiimeDir, "core_metrics_results"),  # Output directory that will host the core metrics
+	"|", "tee", os.path.join(reportsDir, "qiime2_diversityMetrics_report.txt")])  # Output diversityMetrics report
+	subprocess.run(phylogeneticDiversityAnalysis, shell=True)
 	return 
 
 def main():
@@ -284,9 +335,11 @@ def main():
 	"""
 
 	## OTU analysis 
-	otu_mainAnalysis()  # This function hosts the main otu analysis
+	# otu_mainAnalysis()  # This function hosts the main otu analysis
 	
-
 	## Downstream analysis
+	phylogenetic_diversity_analysis()  #
+
+	
 
 if __name__ == "__main__": main()
