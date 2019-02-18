@@ -78,14 +78,16 @@ preprocessedFiles = os.path.join(analysisDir, "preprocessed_files")  # Save proc
 temp = os.path.join(preprocessedFiles, "temp")
 filteredDir = os.path.join(preprocessedFiles, "filtered_data")
 
-qiimeResults = os.path.join(qiimeDir, "denoising_results")
+qiimeResults = os.path.join(qiimeDir, "denoising_analysis")
 diversityAnalysis = os.path.join(qiimeDir, "diversity_analysis")
+taxinomicAnalysis = os.path.join(qiimeDir, "taxinomic_analysis")
 
 preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
-analysisReports = os.path.join(reportsDir, "analysis_reports")
+summaryDir = os.path.join(analysisDir, "summarisation")
 
 # Generation of the directories
-for files in [temp, qiimeDir, diversityAnalysis, filteredDir, preprocessingReports, analysisReports]:
+for files in [temp, qiimeDir, diversityAnalysis, taxinomicAnalysis,\
+			  filteredDir, preprocessingReports, summaryDir]:
 	if not os.path.exists(files): os.makedirs(files)
 
 
@@ -111,7 +113,7 @@ def assess_input_data(input_directory):
 
 def mildQualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 	""" An initial very mild base quality trimming will be performed. In this step, we are trying to 
-	discard very troublesome bases (whos quality is below Q15). That way we remove obvious trash and 
+	discard very troublesome bases (whos quality is below Q20). That way we remove obvious trash and 
 	trying to improve the chances of a proper merge. """
 	forwardRead_output = os.path.join(filteredDir, os.path.basename(forwardRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
 						 if forwardRead.endswith(x)][0], ".fastq.gz"))
@@ -126,7 +128,7 @@ def mildQualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 	"--trim-n",  # Trim N's on ends of reads
 	"--no-indels",  # Not allowing indels in the alignments
 	"-m", "20",  # Discard reads shorter than 20 bases
-	"--quality-cutoff", "15",  # Trim low-quality bases from 3' end of each read (Q<15)
+	"--quality-cutoff", "20",  # Trim low-quality bases from 3' end of each read (Q<20)
 	"--overlap", str(len(args.forwardPrimer)-3), # Min overlap between read and adapter for an adapter to be found
 	"--discard-untrimmed",  # Discard reads that do not contain a primer
 	"--output", forwardRead_output,  # Export edited forward read to file
@@ -178,7 +180,7 @@ def quality_control():
 
 	os.system('mv {0}/*_report.txt {1}'.format(preprocessingReports, reportsDir))  # Moving all reports in the reports folder
 	# os.system('rm -r {0}/*_report_data'.format(preprocessingReports))  # Removing MultiQC temporary folder
-	# os.system("chmod 755 -R {0}".format(preprocessedFiles))	
+	# os.system('chmod 755 -R {0}'.format(preprocessedFiles))	
 	return
 
 def otu_mainAnalysis():
@@ -195,7 +197,7 @@ def otu_mainAnalysis():
 
 	importSamplesQC =	' '.join([
 	"qiime demux summarize",  # Calling qiime demux summarize to quality of each sample
-	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--quiet",  # Silence output if execution is successful
 	"--i-data", os.path.join(qiimeDir, "input_data.qza"),  # Path where the input artifact is written
 	"--o-visualization", os.path.join(preprocessingReports, "inputData_QC.qzv"),  # Output reports
 	"|", "tee", os.path.join(reportsDir, "qiime2_importSamplesQC_report.txt")])  # Output importSamplesQC report
@@ -207,7 +209,7 @@ def otu_mainAnalysis():
 	denoisingNmerging = ' '.join([
 	"qiime dada2 denoise-paired",  # Call qiime dada2 to denoise the preprocessed data
 	"--p-n-threads", str(args.threads),  # Number of threads to use
-	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--quiet",  # Silence output if execution is successful
 	"--p-trunc-len-f", "0",  # No truncation will be performed cause we have already trimmed low quality ends
 	"--p-trunc-len-r", "0",  # No truncation will be performed cause we have already trimmed low quality ends
 	"--output-dir", qiimeResults,  # Output results to a directory
@@ -215,74 +217,65 @@ def otu_mainAnalysis():
 	"|", "tee", os.path.join(reportsDir, "dada2_denoising_report.txt")])  # Output denoising report
 	subprocess.run(denoisingNmerging, shell=True)
 
-	""" At this stage, we have obtained the artifacts containing the feature table and corresponding feature sequences. 
-	Now we will generate summary of the above features and proceed with visualisation of the data. """
 	featureTableSummary = ' '.join([
 	"qiime feature-table summarize",  # Calling qiime2 feature-table summarize function
 	# "--m-sample-metadata-file", args.metadata,  # Metadata file
-	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--quiet",  # Silence output if execution is successful
 	"--i-table", os.path.join(qiimeResults, "table.qza"),  # The feature table to be summarized
-	"--o-visualization", os.path.join(qiimeDir, "featureTable.qzv"),  # Output results to directory
+	"--o-visualization", os.path.join(qiimeResults, "feature_table.qzv"),  # Output results to directory
 	"|", "tee", os.path.join(preprocessingReports, "qiime2_featureTableSummary_report.txt")])  # Output featureTableSummary report
 	subprocess.run(featureTableSummary, shell=True)
 	
-	featureIdentifierToSeqMapping = ' '.join([
-	"qiime feature-table tabulate-seqs",  # Calling qiime2 feature-table tabulate-seqs function
-	"--verbose",  # Display verbose output to stdout and/or stderr during execution
-	"--i-data", os.path.join(qiimeResults, "representative_sequences.qza"),  # The feature sequences to be tabulated
-	"--o-visualization", os.path.join(qiimeResults, "representative_sequences.qzv"),  # Output file
-	"|", "tee", os.path.join(preprocessingReports, "qiime2_featureIdentifierToSeqMapping_report.txt")])  # Output featureIdentifierToSeqMapping report
-	subprocess.run(featureIdentifierToSeqMapping, shell=True)
-	
-	# print("Visualisation of the basic statistics regarding the denoising process: in progress ..")
-	visualisationOfDenoisingStats = ' '.join([
-	"qiime metadata tabulate",  # Calling qiime2 metadata tabulate function
-  	"--m-input-file", os.path.join(qiimeResults, "denoising_stats.qza"),  # Metadata input file
-  	"--o-visualization", os.path.join(qiimeResults, "denoising-stats.qzv"),  # Output visualization file 
-  	"|", "tee", os.path.join(reportsDir, "qiime2_visualisationOfDenoisingStats_report.txt")])  # Output denoising report
-	subprocess.run(visualisationOfDenoisingStats, shell=True)
-
 	""" Applying basic filters for how frequent a variant needs to be """
 	filteringVariant = ' '.join([
 	"qiime feature-table filter-features",  # Calling qiime2 feature-table filter-features function
 	# "--m-sample-metadata-file", args.metadata,  # Metadata file
-	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	# "--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--i-table", os.path.join(qiimeResults, "table.qza"),  # Input feature table
-	"--p-min-frequency", "10",  # total frequency that a feature must have to be retained
+	"--p-min-frequency", freqTheshold(os.path.join(qiimeResults, "feature_table.qzv")),  # Least frequency that a feature must have to be retained
 	"--p-min-samples", "1",  # The minimum number of samples that a feature must be observed in to be retained
-	"--o-filtered-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # Output file
+	"--o-filtered-table", os.path.join(qiimeResults, "table_filtered.qza"),  # Output file
 	"|", "tee", os.path.join(reportsDir, "qiime2_filteringVariant_report.txt")])  # Output denoising report
 	subprocess.run(filteringVariant, shell=True)
 
-	""" Generate a heatmap representation of the filtered feature table """
+
+	###################### VISUALISATION AND DATA EXPORT ##########################################
+
+
+	""" At this stage, we have obtained the artifacts containing the feature table and corresponding feature sequences. 
+	Now we will generate summary of the above features and proceed with visualisation of the data. """
+	# Generate a heatmap representation of the filtered feature table
 	filteredFeaturesHeatmap = ' '.join([
 	"qiime feature-table heatmap",  # Calling qiime2 feature-table heatmap function
 	# "--m-sample-metadata-file", args.metadata,  # Metadata file
-	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--quiet",  # Silence output if execution is successful
 	"--p-color-scheme", "Paired",  # The color scheme of the heatmap
 	"--p-cluster", "features",  # Perform the clusterring based on the features
-	"--o-visualization", os.path.join(qiimeResults, "filteredFeaturesHeatmap"),  # Output directory
-	"--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # The input filtered feature table
+	"--o-visualization", os.path.join(qiimeResults, "heatmap_filtered.qzv"),  # Output directory
+	"--i-table", os.path.join(qiimeResults, "table_filtered.qza"),  # The input filtered feature table
 	"|", "tee", os.path.join(preprocessingReports, "qiime2_filteredFeaturesHeatmap_report.txt")])  # Output filteredFeaturesHeatmap report
 	subprocess.run(filteredFeaturesHeatmap, shell=True)
+	export(os.path.join(qiimeResults, "heatmap_filtered.qzv"))
 
-	""" Obtainng the filtered features and sequences """
+	# Obtaing the filtered sequences
 	filteredFeaturesSeqs = ' '.join([
 	"qiime feature-table filter-seqs",
     # "--m-sample-metadata-file", args.metadata,  # Metadata file
 	"--i-data", os.path.join(qiimeResults, "representative_sequences.qza"),  # The sequences from which features should be filtered.
-    "--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # Input table containing feature ids used for id-based filtering
-    "--o-filtered-data", os.path.join(qiimeResults, "representative_sequences_filt.qza"),  # The output filtered sequences
+    "--i-table", os.path.join(qiimeResults, "table_filtered.qza"),  # Input table containing feature ids used for id-based filtering
+    "--o-filtered-data", os.path.join(qiimeResults, "representative_sequences_filtered.qza"),  # The output filtered sequences
 	"|", "tee", os.path.join(preprocessingReports, "qiime2_filteredFeaturesSeqs_report.txt")])  # Output filteredFeaturesSeqs report
 	subprocess.run(filteredFeaturesSeqs, shell=True)
 
+	# New summary of the filtered abundance table
 	filteredFeaturesSummary = ' '.join([
 	"qiime feature-table summarize",  # Calling qiime2 feature-table summarize function
 	# "--m-sample-metadata-file", args.metadata,  # Metadata file
-	"--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # Input feature table to be summarized
-	"--o-visualization", os.path.join(qiimeResults, "feature_frequencyFiltered_SummaryTable.qzv"),  # Output file
+	"--i-table", os.path.join(qiimeResults, "table_filtered.qza"),  # Input feature table to be summarized
+	"--o-visualization", os.path.join(qiimeResults, "feature_table_filtered.qzv"),  # Output file
 	"|", "tee", os.path.join(preprocessingReports, "qiime2_filteredFeaturesSummary_report.txt")])  # Output filteredFeaturesSummary report
 	subprocess.run(filteredFeaturesSummary, shell=True)
+	export(os.path.join(qiimeResults, "feature_table_filtered.qzv"))
 	return 
 
 def phylogenetic_diversity_analysis():
@@ -297,25 +290,118 @@ def phylogenetic_diversity_analysis():
 	"qiime phylogeny align-to-tree-mafft-fasttree", # Calling qiime2 align-to-tree-mafft-fasttree function
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--p-n-threads", str(args.threads),  # Number of threads to use
-	"--i-sequences", os.path.join(qiimeResults, "representative_sequences_filt.qza"),  # he sequences to be used for creating a phylogenetic tree
-	"--o-alignment", os.path.join(diversityAnalysis, "aligned_reprSeqs.qza"),  # The aligned sequences
-	"--o-masked-alignment", os.path.join(diversityAnalysis, "masked_aligned_reprSeqs.qza"),  # The masked alignment
+	"--i-sequences", os.path.join(qiimeResults, "representative_sequences_filtered.qza"),  # he sequences to be used for creating a phylogenetic tree
+	"--o-alignment", os.path.join(diversityAnalysis, "aligned_representative_sequences.qza"),  # The aligned sequences
+	"--o-masked-alignment", os.path.join(diversityAnalysis, "masked_aligned_representative_sequences.qza"),  # The masked alignment
 	"--o-tree", os.path.join(diversityAnalysis, "unrooted_tree.qza"),  # The unrooted phylogenetic tree
 	"--o-rooted-tree", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
 	"|", "tee", os.path.join(reportsDir, "qiime2_phylogeneticDiversityAnalysis_report.txt")])  # Output phylogeneticDiversityAnalysis report
 	# subprocess.run(phylogeneticDiversityAnalysis, shell=True)
 
+	""" A key quality control step is to plot rarefaction curves for all 
+	the samples to determine if performed sufficient sequencing """
+	rarefactionCurvesAnalysis =	' '.join([
+	"qiime diversity alpha-rarefaction",
+	"--p-max-depth", "1000",
+	"--p-steps", "20",
+	# "--m-sample-metadata-file", args.metadata,  # Metadata file
+	"--i-table", os.path.join(qiimeResults, "table_filtered.qza"),  # Input filtered feature table
+	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  #  Input phylogeny for phylogenetic metrics
+	"--o-visualization", os.path.join(diversityAnalysis, "rarefaction_curves.qzv"),  # Output visualisation
+	"|", "tee", os.path.join(reportsDir, "qiime2_phylogeneticDiversityAnalysis_report.txt")])  # Output rarefactionCurvesAnalysis report
+	# subprocess.run(rarefactionCurvesAnalysis, shell=True)
+
+	perSampleRarefactionCurvesAnalysis = ' '.join([
+	"qiime diversity alpha-rarefaction",
+	"--p-max-depth", "1000",
+	"--p-steps", "20",  # The number of rarefaction depths to include between min_depth and max_depth
+	"--i-table", os.path.join(qiimeResults, "table_filtered.qza"),  # Input filtered feature table
+	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  #  Input phylogeny for phylogenetic metrics
+	"--o-visualization", os.path.join(diversityAnalysis, "rarefaction_curves.qzv"),  # Output visualisation
+	"|", "tee", os.path.join(reportsDir, "qiime2_phylogeneticDiversityAnalysis_report.txt")])  # Output perSampleRarefactionCurvesAnalysis report
+	# subprocess.run(perSampleRarefactionCurvesAnalysis, shell=True)
+
+	""" Common alpha and beta-diversity metrics and ordination plots (such as PCoA plots for weighted UniFrac distances) 
+	This command will also rarefy all samples to the sample sequencing depth before calculating these metrics 
+	(X is a placeholder for the lowest reasonable sample depth; samples with depth below this cut-off will be excluded) """
 	diversityMetrics =	' '.join([
 	"qiime diversity core-metrics-phylogenetic",  # Calling qiime 2diversity core-metrics-phylogenetic function
 	# "--m-sample-metadata-file", args.metadata,  # Metadata file
 	# "--verbose",  # Display verbose output to stdout and/or stderr during execution
 	"--p-n-jobs", str(args.threads), # The number of CPUs to be used for the computation
 	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
-	"--i-table", os.path.join(qiimeResults, "feature_frequencyFiltered_table.qza"),  # The input filtered feature table
+	"--i-table", os.path.join(qiimeResults, "table_filtered.qza"),  # The input filtered feature table
 	"--p-sampling-depth", "1109",  # The total frequency that each sample should be rarefied to prior to computing diversity metrics
 	"--output-dir", os.path.join(qiimeDir, "core_metrics_results"),  # Output directory that will host the core metrics
 	"|", "tee", os.path.join(reportsDir, "qiime2_diversityMetrics_report.txt")])  # Output diversityMetrics report
-	subprocess.run(phylogeneticDiversityAnalysis, shell=True)
+	# subprocess.run(diversityMetrics, shell=True)
+	return 
+
+def taxonomic_analysis():
+	# time qiime feature-classifier classify-sklearn \
+ #  --i-classifier  /project/microbiome_workshop/amplicon/data/taxonomy/gg-13-8-99-515-806-nb-classifier.qza \
+ #  --i-reads rep-seqs-dada2.qza \
+ #  --o-classification taxonomy.qza
+
+ #  qiime metadata tabulate \
+ #  --m-input-file taxonomy.qza \
+ #  --o-visualization taxonomy.qzv
+
+ #  qiime taxa barplot \
+ #  --i-table table-dada2.qza \
+ #  --i-taxonomy taxonomy.qza \
+ #  --m-metadata-file /project/microbiome_workshop/amplicon/data/mapping.txt \
+ #  --o-visualization taxa-bar-plots.qzv
+	return
+
+def freqTheshold(exportFile):
+	subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(exportFile, exportFile[:-4]), shell=True)
+	""" Based on the summary we will calculate a cut-off for how frequent a variant needs to be for it to be retained. 
+	We will remove all ASVs that have a frequency of less than 0.1% of the mean sample depth. This cut-off excludes 
+	ASVs that are likely due to MiSeq bleed-through between runs (reported by Illumina to be 0.1% of reads). """
+	mean_freq = 0
+	for path, subdir, folder in os.walk(exportFile[:-4]):
+		for name in folder:
+			file = os.path.join(path, name)
+			if file.endswith("sample-frequency-detail.csv"):
+				samples = 0
+				with open(file) as fin:
+					for line in fin:
+						samples += 1
+						mean_freq += float(line.split(",")[1])
+				mean_freq = mean_freq/samples
+	shutil.move(exportFile[:-4], summaryDir)  # Moving the folder to summarisation
+	return str(int(mean_freq * 0.001))
+
+def maxDepthThreshold():
+
+	return
+
+def export(exportFile):
+	subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(exportFile, exportFile[:-4]), shell=True)
+	shutil.move(exportFile[:-4], summaryDir)
+	return 
+
+def summarisation():
+	for files in glob.glob(os.path.join(analysisDir, "*/*/*.qz*")):
+		if files.endswith("featureTable.qzv"):
+			subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(files, files[:-4]), shell=True)
+
+	# for path, subdir, folder in os.walk(analysisDir):
+	# 	for name in folder:
+	# 		file = os.path.join(path, name)
+	# 		if os.stat(file).st_size == 0:  
+	# 			print("Removing:\t", file)  
+	# 			os.remove(file)
+	# 		if file.endswith("summarised_report.html"):
+	# 			shutil.copy2(file, summaryDir)
+			# elif file.endswith("index.html"):
+			# 	shutil.copy2(file, os.path.join(summaryDir, "summarised_report2.html"))
+
+			#### change index based on folder.. 
+
+
+
 	return 
 
 def main():
@@ -339,7 +425,8 @@ def main():
 	
 	## Downstream analysis
 	phylogenetic_diversity_analysis()  #
-
+	# taxonomic_analysis()
+	# summarisation()
 	
 
 if __name__ == "__main__": main()
