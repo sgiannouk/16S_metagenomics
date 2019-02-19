@@ -22,14 +22,15 @@ import shutil, fnmatch, glob, sys, os
 
 # Configuration file needed for FastQ Screen
 fastQscreen_config = "/home/stavros/playground/16S_metagenomics/subsidiary_files/fastq_screen.conf"
+silva_reference = "/home/stavros/playground/16S_metagenomics/subsidiary_files/SILVA_132/rep_set/rep_set_16S_only/99/silva_132_99_16S.fna"
+silva_taxinomy = "/home/stavros/playground/16S_metagenomics/subsidiary_files/SILVA_132/taxonomy/16S_only/99/consensus_taxonomy_7_levels.txt"
 
 # Tracking time of analysis
 start_time = datetime.now()
 
 usage = "otu_classification [options] -i <input_directory/input_files>"
 epilog = " -- January 2019 | Stavros Giannoukakos -- "
-description = "DESCRIPTION\
-           		\n-----------"
+description = "DESCRIPTION"
 
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, usage=usage, description=description, epilog=epilog)
 # Create required section in help
@@ -337,21 +338,86 @@ def phylogenetic_diversity_analysis():
 	# subprocess.run(diversityMetrics, shell=True)
 	return 
 
-def taxonomic_analysis():
-	# time qiime feature-classifier classify-sklearn \
- #  --i-classifier  /project/microbiome_workshop/amplicon/data/taxonomy/gg-13-8-99-515-806-nb-classifier.qza \
- #  --i-reads rep-seqs-dada2.qza \
- #  --o-classification taxonomy.qza
+def taxonomic_assignemnet():
+	""" We will train the Naive Bayes classifier using SILVA (132) reference sequences 
+	and classify the representative sequences from the input dataset """
+	# Importing SILVA reference taxonomy sequences
+	importSilvaReference = ' '.join([
+	"qiime tools import",  # Import function
+	"--type", "\'FeatureData[Sequence]\'",  # Type of imported data
+  	"--input-path", silva_reference,  # Input SILVA 132 database
+  	"--output-path", os.path.join(taxinomicAnalysis, "silva132_99_OTUs.qza"),  # Output file
+  	"|", "tee", os.path.join(reportsDir, "qiime2_importSilvaReference_report.txt")])  # Output importSilvaReference report
+	# subprocess.run(importSilvaReference, shell=True)
 
- #  qiime metadata tabulate \
- #  --m-input-file taxonomy.qza \
- #  --o-visualization taxonomy.qzv
+	# Importing SILVA reference taxonomy annotation
+	importSilvaRefTaxonomy = ' '.join([
+	"qiime tools import",  # Import function
+	"--type", "\'FeatureData[Taxonomy]\'",  # Type of imported data
+	"--input-format", "HeaderlessTSVTaxonomyFormat",  # Type of input file
+  	"--input-path", silva_taxinomy,  # Input annotation file
+  	"--output-path", os.path.join(taxinomicAnalysis, "silva132_99_OTU_taxonomy.qza"),  # Output artifact 
+	"|", "tee", os.path.join(reportsDir, "qiime2_importSilvaReference_report.txt")])  # Output importSilvaRefTaxonomy report
+	# subprocess.run(importSilvaRefTaxonomy, shell=True)
 
- #  qiime taxa barplot \
- #  --i-table table-dada2.qza \
- #  --i-taxonomy taxonomy.qza \
- #  --m-metadata-file /project/microbiome_workshop/amplicon/data/mapping.txt \
- #  --o-visualization taxa-bar-plots.qzv
+	""" It has been shown that taxonomic classification accuracy of 16S rRNA gene sequences 
+	improves when a Naive Bayes classifier is trained on only the region of the target 
+	sequences that was sequenced. Here we will extract the reference sequences. """
+	# Extract sequencing-like reads from a reference database
+	extractRefReads = ' '.join([
+	"qiime feature-classifier extract-reads",
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--p-min-length", "250",  # Minimum amplicon length
+	"--p-max-length", "520",  # Maximum amplicon length
+	"--p-f-primer", args.forwardPrimer,  # Forward primer sequence
+	"--p-r-primer", args.reversePrimer,  # Reverse primer sequence
+	"--i-sequences", os.path.join(taxinomicAnalysis, "silva132_99_OTUs.qza"),  # Input reference seq artifact
+	"--o-reads", os.path.join(taxinomicAnalysis, "silva132_reference_sequences.qza"),  # Output ref sequencing-like reads
+	"|", "tee", os.path.join(reportsDir, "qiime2_importSilvaReference_report.txt")])  # Output extractRefReads report
+	# subprocess.run(extractRefReads, shell=True)
+
+	""" We can now train a Naive Bayes classifier as follows, using 
+	the reference reads and taxonomy that we just created """
+	trainClassifier = ' '.join([
+	"qiime feature-classifier fit-classifier-naive-bayes",
+	"--verbose",  # Display verbose output to stdout and/or stderr during execution
+	"--i-reference-reads", os.path.join(taxinomicAnalysis, "silva132_reference_sequences.qza"),
+	"--i-reference-taxonomy", os.path.join(taxinomicAnalysis, "silva132_99_OTU_taxonomy.qza"),
+	"--o-classifier", os.path.join(taxinomicAnalysis, "classifier.qza"), 
+	"|", "tee", os.path.join(reportsDir, "qiime2_trainClassifier_report.txt")])  # Output trainClassifier report
+	subprocess.run(trainClassifier, shell=True)
+	export(os.path.join(taxinomicAnalysis, "classifier.qza"))
+
+	""" Assign the taxonomy """
+	assignTaxonomy = ' '.join([
+	"qiime feature-classifier classify-sklearn",
+	"--quiet",  # Silence output if execution is successful
+	"--p-n-jobs", str(args.threads),  # Number of threads to use
+	"--i-classifier", os.path.join(taxinomicAnalysis, "classifier.qza"), 
+	"--i-reads", os.path.join(qiimeResults, "representative_sequences_filtered.qza"),  # The output filtered sequences
+	"--o-classification", os.path.join(taxinomicAnalysis, "taxonomic_classification.qza"),
+	"|", "tee", os.path.join(reportsDir, "qiime2_assignTaxonomy_report.txt")])  # Output assignTaxonomy report
+	# subprocess.run(assignTaxonomy, shell=True)
+
+	outputClassifications = ' '.join([
+	"qiime metadata tabulate",
+	"--quiet",  # Silence output if execution is successful
+	"--m-input-file", os.path.join(taxinomicAnalysis, "taxonomic_classification.qza"),
+	"--o-visualization", os.path.join(taxinomicAnalysis, "taxonomic_classification.qzv"),
+	"|", "tee", os.path.join(reportsDir, "qiime2_assignTaxonomy_report.txt")])  # Output outputClassifications report
+	# subprocess.run(outputClassifications, shell=True)
+	# export(os.path.join(taxinomicAnalysis, "taxonomic_classification.qzv"))
+
+	barplotOfTaxonomy = ' '.join([
+	"qiime taxa barplot", 
+	"--quiet",  # Silence output if execution is successful
+	"--i-table", os.path.join(qiimeResults, "table_filtered.qza"),
+	"--i-taxonomy", os.path.join(taxinomicAnalysis, "taxonomic_classification.qza"),
+	# "--m-sample-metadata-file", args.metadata,  # Metadata file
+	"--o-visualization", os.path.join(taxinomicAnalysis, "taxonomy_barplot.qzv"),
+	"|", "tee", os.path.join(reportsDir, "qiime2_barplotOfTaxonomy_report.txt")])  # Output barplotOfTaxonomy report
+	# subprocess.run(barplotOfTaxonomy, shell=True)
+	# export(os.path.join(taxinomicAnalysis, "taxonomy_barplot.qzv"))
 	return
 
 def freqTheshold(exportFile):
@@ -424,8 +490,8 @@ def main():
 	# otu_mainAnalysis()  # This function hosts the main otu analysis
 	
 	## Downstream analysis
-	phylogenetic_diversity_analysis()  #
-	# taxonomic_analysis()
+	# phylogenetic_diversity_analysis()  #
+	taxonomic_assignemnet()
 	# summarisation()
 	
 
