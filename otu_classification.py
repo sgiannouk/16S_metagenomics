@@ -12,10 +12,11 @@
 #     $ conda deactivate
 
 #Version of the program
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
-import subprocess
+from Bio import SeqIO
+import subprocess, gzip
 from Bio.Seq import Seq
 from datetime import datetime
 import shutil, fnmatch, glob, sys, os
@@ -24,6 +25,7 @@ import shutil, fnmatch, glob, sys, os
 fastQscreen_config = "/home/stavros/playground/16S_metagenomics/subsidiary_files/fastq_screen.conf"
 silva_reference = "/home/stavros/playground/16S_metagenomics/subsidiary_files/SILVA_132/rep_set/rep_set_16S_only/99/silva_132_99_16S.fna"
 silva_taxinomy = "/home/stavros/playground/16S_metagenomics/subsidiary_files/SILVA_132/taxonomy/16S_only/99/consensus_taxonomy_7_levels.txt"
+metadata_file = "/home/stavros/playground/16S_metagenomics/data/metadata.csv"
 
 # Tracking time of analysis
 start_time = datetime.now()
@@ -39,7 +41,7 @@ requiredArgs = parser.add_argument_group('required arguments')
 requiredArgs.add_argument('-i', '--input_dir', required=True, metavar='', 
 						   help="Path of the input directory that contains the raw data.\nBoth forward and reverse reads are expected to be found\nin this directory.")
 # Number of threads/CPUs to be used
-parser.add_argument('-th', '--threads', dest='threads', default=20, metavar='', 
+parser.add_argument('-th', '--threads', dest='threads', default=50, metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Number of threads/CPUs to be used
 parser.add_argument('-fp', '--forwardPrimer', default="GTGCCAGCMGCCGCGGTAA", required=False, metavar='', 
@@ -87,11 +89,10 @@ preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
 summaryDir = os.path.join(analysisDir, "summarisation")
 
 # Generation of the directories
-for files in [temp, qiimeDir, diversityAnalysis, taxinomicAnalysis,\
-			  filteredDir, preprocessingReports, summaryDir]:
+for files in [temp, qiimeDir, filteredDir, preprocessingReports, summaryDir]:
 	if not os.path.exists(files): os.makedirs(files)
 
-
+args.metadata = metadata_file
 
 def assess_input_data(input_directory):
 	""" In this function the PE input data will be assesses for valid format and 
@@ -99,13 +100,10 @@ def assess_input_data(input_directory):
 	input_files = []  # Output list that will contain the paired-input files
 	for path, subdirs, files in os.walk(input_directory):
 		for name in files:
-			# Checking the format of the reads
-			if not name.endswith((".fastq.gz", ".fq.gz")):  
-				sys.exit('Unidentified input format in read: {0}'.format(name))
 			# Verifying that all reads have their pairs
-			elif not any(x in name.upper() for x in ["_R1_", "_R2_"]):
+			if name.endswith((".fastq.gz", ".fq.gz")) and not any(x in name.upper() for x in ["_R1_", "_R2_"]):
 				sys.exit('Unidentified member of a pair in read: {0}'.format(name))  
-			elif "_R1_" in name:  # Obtaining the paired-input files
+			elif name.endswith((".fastq.gz", ".fq.gz")) and "_R1_" in name:  # Obtaining the paired-input files
 				inR1 = os.path.join(os.path.abspath(path), name)
 				inR2 = inR1.replace("_R1_","_R2_")
 				assert (os.path.isfile(inR2)), 'Could not detect the pair of {0} ({1})'.format(inR1, inR2)
@@ -121,25 +119,30 @@ def mildQualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 	reverseRead_output = os.path.join(filteredDir, os.path.basename(reverseRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
 						 if reverseRead.endswith(x)][0], ".fastq.gz"))
 	
-	print("{0}/{1}. Mild base quality filtering in {2}".format((i+1), totNum, os.path.basename(forwardRead.split("_")[-1])))
-	cutadapt = ' '.join([
-	"cutadapt",  # Call Cutadapt to preprocess the raw data
-	"--cores", str(args.threads),  # Number of CPUs to use
-	"--max-n", "0",  # Discard reads with 'N' bases. Dada2 cannot comprehend Ns. 
-	"--trim-n",  # Trim N's on ends of reads
-	"--no-indels",  # Not allowing indels in the alignments
-	"-m", "20",  # Discard reads shorter than 20 bases
-	"--quality-cutoff", "20",  # Trim low-quality bases from 3' end of each read (Q<20)
-	"--overlap", str(len(args.forwardPrimer)-3), # Min overlap between read and adapter for an adapter to be found
-	"--discard-untrimmed",  # Discard reads that do not contain a primer
-	"--output", forwardRead_output,  # Export edited forward read to file
-	"--paired-output", reverseRead_output,  # Export edited reverse read to file
-	"-a", "{0}...{1}".format(args.forwardPrimer, Seq(args.reversePrimer).reverse_complement()),  # R1 linked adapter FWDPRIMER...RCREVPRIMER
-	"-A", "{0}...{1}".format(args.reversePrimer, Seq(args.forwardPrimer).reverse_complement()),  # R2 linked adapter REVPRIMER...RCFWDPRIMER
-	forwardRead,  # Input of the forward file
-	reverseRead,  # Input of the reverse file
-	"|", "tee", "--append", os.path.join(preprocessingReports, "cutadapt_mildQtrimNoPrimers_report.txt")])  # Output trimming report
-	subprocess.run(cutadapt, shell=True)
+	print("{0}/{1}. Mild base quality filtering in {2}".format(i, totNum, os.path.basename(forwardRead.split("_")[0])))
+	# Calculating the minimum and maximum acceptable length after primer and quality trimming
+	minlength, maxlength = calculateMinMax(forwardRead) 
+	bbduk = ' '.join([
+	"/opt/anaconda3/bin/bbduk.sh",  # Call BBDuck (BBTools) to preprocess the raw data
+	"threads={0}".format(str(args.threads)),  # Set number of threads to use
+	"in={0}".format(forwardRead),  # Input of the forward file
+	"in2={0}".format(reverseRead),  # Input of the reverse file
+	"out={0}".format(forwardRead_output),  # Export edited forward read to file
+	"out2={0}".format(reverseRead_output),  # Export edited reverse read to file
+	"tbo",  # Trims primers based on overlap	
+	"trimq=18",  # Regions with average quality BELOW this will be trimmed 
+	"qtrim=r",  # Trim read ends to remove bases with Q<18
+	"k=10",  # Setting the kmer size we want to search for
+	"ordered=t",  # Keeps the reads in the same order as we gave them to the software
+	"mink=4",  # Specifies the smallest word size it will check against either edge of a read
+	"ktrim=l",  # Trim everything to the left of the identified primers
+	"rcomp=f",  # States not to look for the reverse complement
+	"literal={0},{1}".format(args.forwardPrimer, args.reversePrimer),  # Providing the forward and reverse primers
+	"minlength={0}".format(minlength), #220 Pairs (or reads) will be discarded if both are shorter than this after trimming
+	"maxlength={0}".format(maxlength), #280 Pairs (or reads) will be discarded only if both are longer than this after trimming
+	"minavgquality={0}".format(20),  # Reads with average quality (after trimming) below this will be discarded
+	"2>", os.path.join(preprocessingReports, "bbduk_mildQtrimNoPrimers_report.txt")])  # Output trimming report
+	subprocess.run(bbduk, shell=True)
 	return 
 
 def quality_control():
@@ -160,18 +163,44 @@ def quality_control():
 	"|", "tee", "--append", os.path.join(preprocessingReports, "fastQscreen_report.txt")])  # Output fastQ screen report
 	subprocess.run(fastQscreen, shell=True)
 
-	print("Quality Control reports for the following data are being generated: in progress ..")
-	afterQC = ' '.join([
-	"after.py",  # Call fastQC to quality control all processed data
-	"--input_dir", filteredDir,  # Input directory to be process automatically
-	"--good_output_folder", temp,  # Storing good reads
-	"--bad_output_folder", temp,  # Storing bad reads
-	"--report_output_folder", preprocessingReports,  # Create all output files in this specified output directory
-	"|", "tee", "--append", os.path.join(preprocessingReports, "afterQC_report.txt")])  # Output fastQC report
-	subprocess.run(afterQC, shell=True) 
+	# print("Quality Control reports for the forward reads are being generated: in progress ..")
+	fastQC_frw = ' '.join([
+	"fastqc",  # Call fastQC to quality contol all processed data
+	"--threads", str(args.threads),  # Number of threads to use
+	"--quiet",  # Print only log warnings
+	"--outdir", preprocessingReports,  # Create all output files in this specified output directory
+	mfiltered_data,  # String containing all samples that are about to be checked
+	"|", "tee", "--append", os.path.join(preprocessingReports, "fastQC_frw_report.txt")])  # Output fastQC report
+	subprocess.run(fastQC_frw, shell=True)
+
+	# print("Quality Control reports for the reverse reads are being generated: in progress ..")
+	fastQC_rev = ' '.join([
+	"fastqc",  # Call fastQC to quality contol all processed data
+	"--threads", str(args.threads),  # Number of threads to use
+	"--quiet",  # Print only log warnings
+	"--outdir", preprocessingReports,  # Create all output files in this specified output directory
+	mfiltered_data.replace("_R1_", "_R2_"),  # String containing all samples that are about to be checked
+	"|", "tee", "--append", os.path.join(preprocessingReports, "fastQC_rev_report.txt")])  # Output fastQC report
+	subprocess.run(fastQC_rev, shell=True)
+
+	for files in glob.glob(os.path.join(filteredDir, "*R1*.fastq.gz")):
+		fastP = ' '.join([
+		"fastp",  # Call fastQC to quality control all processed data
+		"--thread", str(args.threads),  # Number of threads to use
+		"--in1", files,  # Input read1 file
+		"--in2", files.replace("_R1_", "_R2_"),  # Input read2 file
+		"--disable_adapter_trimming",  # Adapter trimming is disabled
+		"--disable_trim_poly_g",  # Disable polyG tail trimming
+		"--disable_quality_filtering",  # Quality filtering is disabled
+		"--disable_length_filtering",  # Length filtering is disabled
+		"--overrepresentation_analysis",  # Enable overrepresented sequence analysis
+		"--html", os.path.join(preprocessingReports, "{0}_fastp.html".format(os.path.basename(files)[:-9])),  # Create ftml file in this specified output directory
+		"--json", os.path.join(preprocessingReports, "{0}_fastp.json".format(os.path.basename(files)[:-9])),  # Create json output file in this specified output directory
+		"|", "tee", "--append", os.path.join(preprocessingReports, "fastP_report.txt")])  # Output fastP report
+		subprocess.run(fastP, shell=True) 
 
 	multiQC = " ".join([
-	"multiqc",  # Call MultiQC
+	"/usr/local/bin/multiqc",  # Call MultiQC
 	"--quiet",  # Print only log warnings
 	"--outdir", preprocessingReports,  # Create report in the FastQC reports directory
 	"--filename", "summarised_report",  # Name of the output report 
@@ -203,6 +232,7 @@ def otu_mainAnalysis():
 	"--o-visualization", os.path.join(preprocessingReports, "inputData_QC.qzv"),  # Output reports
 	"|", "tee", os.path.join(reportsDir, "qiime2_importSamplesQC_report.txt")])  # Output importSamplesQC report
 	subprocess.run(importSamplesQC, shell=True)
+
 
 	""" Denoising is an attempt to correct reads with sequencing errors and then 
 	remove chimeric sequences originating from different DNA templates. """
@@ -287,6 +317,8 @@ def phylogenetic_diversity_analysis():
   	rooted at its  midpoint. Afterwards, a  collection of diversity metrics 
   	(both phylogenetic and non-phylogenetic) is being applied to the feature 
   	table. """
+	if not os.path.exists(diversityAnalysis): os.makedirs(diversityAnalysis)  # Creating the directory which will host the analysis
+
 	phylogeneticDiversityAnalysis =	' '.join([
 	"qiime phylogeny align-to-tree-mafft-fasttree", # Calling qiime2 align-to-tree-mafft-fasttree function
 	"--verbose",  # Display verbose output to stdout and/or stderr during execution
@@ -342,6 +374,8 @@ def taxonomic_assignemnet():
 	""" We will train the Naive Bayes classifier using SILVA (132) reference sequences 
 	and classify the representative sequences from the input dataset """
 	# Importing SILVA reference taxonomy sequences
+	if not os.path.exists(taxinomicAnalysis): os.makedirs(taxinomicAnalysis)  # Creating the directory which will host the analysis
+
 	importSilvaReference = ' '.join([
 	"qiime tools import",  # Import function
 	"--type", "\'FeatureData[Sequence]\'",  # Type of imported data
@@ -418,7 +452,22 @@ def taxonomic_assignemnet():
 	"|", "tee", os.path.join(reportsDir, "qiime2_barplotOfTaxonomy_report.txt")])  # Output barplotOfTaxonomy report
 	# subprocess.run(barplotOfTaxonomy, shell=True)
 	# export(os.path.join(taxinomicAnalysis, "taxonomy_barplot.qzv"))
+	# summarisation()
 	return
+
+def calculateMinMax(forwardRead):
+
+	primers_averageLength = int((len(args.forwardPrimer) + len(args.reversePrimer))/2)
+
+	read_length = 0
+	with gzip.open(forwardRead, "rt") as handle:
+	    for read in SeqIO.parse(handle, "fastq"):
+	        read_length = len(read.seq)
+	        break
+
+	min_readLength = read_length - (primers_averageLength * 4)
+	max_readLength = read_length - primers_averageLength
+	return (min_readLength, max_readLength)
 
 def freqTheshold(exportFile):
 	subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(exportFile, exportFile[:-4]), shell=True)
@@ -449,25 +498,20 @@ def export(exportFile):
 	return 
 
 def summarisation():
-	for files in glob.glob(os.path.join(analysisDir, "*/*/*.qz*")):
-		if files.endswith("featureTable.qzv"):
-			subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(files, files[:-4]), shell=True)
+	# for files in glob.glob(os.path.join(analysisDir, "*/*/*.qz*")):
+	# 	if files.endswith("featureTable.qzv"):
+	# 		subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(files, files[:-4]), shell=True)
 
-	# for path, subdir, folder in os.walk(analysisDir):
-	# 	for name in folder:
-	# 		file = os.path.join(path, name)
-	# 		if os.stat(file).st_size == 0:  
-	# 			print("Removing:\t", file)  
-	# 			os.remove(file)
-	# 		if file.endswith("summarised_report.html"):
-	# 			shutil.copy2(file, summaryDir)
+	for path, subdir, folder in os.walk(analysisDir):
+		for name in folder:
+			file = os.path.join(path, name)
+			if os.stat(file).st_size == 0:  
+				print("Removing:\t", file)  
+				os.remove(file)
+			if file.endswith("summarised_report.html"):
+				shutil.copy2(file, summaryDir)
 			# elif file.endswith("index.html"):
 			# 	shutil.copy2(file, os.path.join(summaryDir, "summarised_report2.html"))
-
-			#### change index based on folder.. 
-
-
-
 	return 
 
 def main():
@@ -476,23 +520,22 @@ def main():
 	# Obtaining the number of pair files
 	totNum = len(pairedReads)
 
-	"""
 	## Preprocessing of the input data
 	# Performing mild quality trimming and 
 	# removal of all primers on both reads
-	for i, read in enumerate(pairedReads):
-		mildQualityTrimming_primerRemoval(read[0], read[1], i, totNum) 
+	# for i, read in enumerate(pairedReads, 1):
+	# 	mildQualityTrimming_primerRemoval(read[0], read[1], i, totNum) 
 
 	quality_control()  # Checking the quality of the merged reads
-	"""
 
 	## OTU analysis 
 	# otu_mainAnalysis()  # This function hosts the main otu analysis
 	
 	## Downstream analysis
 	# phylogenetic_diversity_analysis()  #
-	taxonomic_assignemnet()
-	# summarisation()
+	
+	# taxonomic_assignemnet()
+
 	
 
 if __name__ == "__main__": main()
