@@ -22,12 +22,9 @@ from datetime import datetime
 import shutil, fnmatch, glob, sys, os
 
 # Configuration file needed for FastQ Screen
-fastQscreen_config = "/home/stavros/playground/progs/16S_subsidiary_files/fastq_screen.conf"
-# silva_reference = "/home/stavros/playground/progs/16S_subsidiary_files/SILVA_132/rep_set/rep_set_16S_only/99/silva_132_99_16S.fna"
-# silva_taxinomy = "/home/stavros/playground/progs/16S_subsidiary_files/SILVA_132/taxonomy/16S_only/99/consensus_taxonomy_7_levels.txt"
-# greengenes_99_classifier = "/home/stavros/playground/progs/16S_subsidiary_files/greengenes_99_classifier.qza"
+fastQscreen_config = "/home/stavros/references/fastQscreen_references/fastq_screen.conf"
 silva_99_classifier = "/home/stavros/playground/progs/16S_subsidiary_files/silva_132_99_v3v4.qza"
-metadata_file = "/home/stavros/playground/16S_metagenomics/data/igtp_batch1_metadata.txt"
+metadata_file = "/shared/projects/martyna_rrna_igtp/supplementary_data/igtp_batch1_metadata.txt"
 
 # Tracking time of analysis
 start_time = datetime.now()
@@ -43,7 +40,7 @@ requiredArgs = parser.add_argument_group('required arguments')
 requiredArgs.add_argument('-i', '--input_dir', required=True, metavar='', 
 						   help="Path of the input directory that contains the raw data.\nBoth forward and reverse reads are expected to be found\nin this directory.")
 # Number of threads/CPUs to be used
-parser.add_argument('-th', '--threads', dest='threads', default=30, metavar='', 
+parser.add_argument('-th', '--threads', dest='threads', default=20, metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Number of threads/CPUs to be used
 parser.add_argument('-fp', '--forwardPrimer', default="CCTACGGGNGGCWGCAG", required=False, metavar='', 
@@ -72,21 +69,16 @@ else:
 	inputDir = args.input_dir
 
 # Main folder hosting the analysis
-analysisDir = os.path.join(args.output_dir if args.output_dir else os.getcwd(), "otu_analysis")
-
+analysisDir = os.path.join(args.output_dir if args.output_dir else os.getcwd(), "16S_metagenomics_analysis")
 # Main subdirectories
 reportsDir = os.path.join(analysisDir, "reports")  # Reports directory
 qiimeDir = os.path.join(analysisDir, "qiime2_analysis")  # Directory hosting the main analysis 
 preprocessedFiles = os.path.join(analysisDir, "preprocessed_files")  # Save processed .fastq files
-
 # Secondary subdirectories
-# temp = os.path.join(preprocessedFiles, "temp")
 filteredDir = os.path.join(preprocessedFiles, "filtered_data")
-
 qiimeResults = os.path.join(qiimeDir, "denoising_analysis")
 diversityAnalysis = os.path.join(qiimeDir, "diversity_analysis")
 taxinomicAnalysis = os.path.join(qiimeDir, "taxinomic_analysis")
-
 preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
 
 # Generation of the directories
@@ -132,18 +124,18 @@ def QualityTrimming_primerRemoval(forwardRead, reverseRead, i, totNum):
 	"in2={0}".format(reverseRead),  # Input of the reverse file
 	"out={0}".format(forwardRead_output),  # Export edited forward read to file
 	"out2={0}".format(reverseRead_output),  # Export edited reverse read to file
-	"trimq=18",  # Regions with average quality BELOW this will be trimmed (10)
-	"qtrim=r",  # Trim read ends to remove bases with Q<15
+	"trimq=18",  # Regions with average quality BELOW this will be trimmed
+	"qtrim=r",  # Trim read ends to remove bases with Q<18
 	"k=10",  # Setting the kmer size we want to search for
 	"mm=f",  # Looking for exact kmers and not mask the middle bases
-	"rcomp=t",  # States not to look for the reverse complement
 	"ordered=t",  # Keeps the reads in the same order as we gave them to the software
 	"mink=4",  # Specifies the smallest word size it will check against either edge of a read
 	"ktrim=l",  # Trim everything to the left of the identified primers
+	"copyundefined=t",  # Process non-AGCT IUPAC reference bases by making all possible unambiguous copies
 	"literal={0},{1}".format(args.forwardPrimer, args.reversePrimer),  # Providing the forward and reverse primers
 	"minlength={0}".format(minlength), #220 Pairs (or reads) will be discarded if both are shorter than this after trimming
 	"maxlength={0}".format(maxlength), # ~ 560 Pairs (or reads) will be discarded only if both are longer than this after trimming
-	"maq={0}".format(20),  # Reads with average quality (after trimming) below this will be discarded (15)
+	"maq={0}".format(20),  # Reads with average quality (after trimming) below this will be discarded (20)
 	"2>>", os.path.join(preprocessingReports, "bbduk_QtrimPrimers_report.txt")])  # Output trimming report
 	subprocess.run(bbduk, shell=True)
 	return 
@@ -218,7 +210,6 @@ def quality_control():
 	os.system('mv {0}/*_report.txt {1}'.format(preprocessingReports, reportsDir))  # Moving all reports in the reports folder
 	os.system('mv {0}/summarised_report.html {1}'.format(preprocessingReports, reportsDir))  # Moving summary report in the reports folder
 	# os.system('rm -r {0}/*_report_data'.format(preprocessingReports))  # Removing MultiQC temporary folder
-	# os.system('chmod 755 -R {0}'.format(preprocessedFiles))	
 	return
 
 def otu_mainAnalysis():
@@ -342,18 +333,18 @@ def phylogenetic_diversity_analysis():
   	table. """
 	if not os.path.exists(diversityAnalysis): os.makedirs(diversityAnalysis)  # Creating the directory which will host the analysis
 
-	# print("Generating a rooted tree for phylogenetic diversity analysis: in progress ..")
-	# phylogeneticDiversityAnalysis =	' '.join([
-	# "qiime phylogeny align-to-tree-mafft-fasttree", # Calling qiime2 align-to-tree-mafft-fasttree function
-	# "--quiet",  # Silence output if execution is successful
-	# "--p-n-threads", str(args.threads),  # Number of threads to use
-	# "--i-sequences", os.path.join(qiimeResults, "representative_sequences_filtered.qza"),  # he sequences to be used for creating a phylogenetic tree
-	# "--o-alignment", os.path.join(diversityAnalysis, "aligned_representative_sequences.qza"),  # The aligned sequences
-	# "--o-masked-alignment", os.path.join(diversityAnalysis, "masked_aligned_representative_sequences.qza"),  # The masked alignment
-	# "--o-tree", os.path.join(diversityAnalysis, "unrooted_tree.qza"),  # The unrooted phylogenetic tree
-	# "--o-rooted-tree", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
-	# "2>>", os.path.join(reportsDir, "qiime2_phylogeneticDiversityAnalysis_report.txt")])  # Output phylogeneticDiversityAnalysis report
-	# subprocess.run(phylogeneticDiversityAnalysis, shell=True)
+	print("Generating a rooted tree for phylogenetic diversity analysis: in progress ..")
+	phylogeneticDiversityAnalysis =	' '.join([
+	"qiime phylogeny align-to-tree-mafft-fasttree", # Calling qiime2 align-to-tree-mafft-fasttree function
+	"--quiet",  # Silence output if execution is successful
+	"--p-n-threads", str(args.threads),  # Number of threads to use
+	"--i-sequences", os.path.join(qiimeResults, "representative_sequences_filtered.qza"),  # he sequences to be used for creating a phylogenetic tree
+	"--o-alignment", os.path.join(diversityAnalysis, "aligned_representative_sequences.qza"),  # The aligned sequences
+	"--o-masked-alignment", os.path.join(diversityAnalysis, "masked_aligned_representative_sequences.qza"),  # The masked alignment
+	"--o-tree", os.path.join(diversityAnalysis, "unrooted_tree.qza"),  # The unrooted phylogenetic tree
+	"--o-rooted-tree", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
+	"2>>", os.path.join(reportsDir, "qiime2_phylogeneticDiversityAnalysis_report.txt")])  # Output phylogeneticDiversityAnalysis report
+	subprocess.run(phylogeneticDiversityAnalysis, shell=True)
 
 	""" A key quality control step is to plot rarefaction curves for all 
 	the samples to determine if performed sufficient sequencing """
@@ -363,7 +354,7 @@ def phylogenetic_diversity_analysis():
 	"qiime diversity alpha-rarefaction",  # Calling qiime2 diversity alpha-rarefaction function
 	"--quiet",  # Silence output if execution is successful
 	"--p-max-depth", "79900",  # The maximum rarefaction depth
-	"--p-steps", "10000",  # The number of rarefaction depths to include between min_depth and max_depth
+	"--p-steps", "5000",  # The number of rarefaction depths to include between min_depth and max_depth
 	"--m-metadata-file", args.metadata,  # Metadata file
 	"--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # Input filtered feature table
 	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  #  Input phylogeny for phylogenetic metrics
@@ -377,7 +368,7 @@ def phylogenetic_diversity_analysis():
 	"qiime diversity alpha-rarefaction",  # Calling qiime2 diversity alpha-rarefaction function
 	"--quiet",  # Silence output if execution is successful
 	"--p-max-depth", "79900",  # The maximum rarefaction depth
-	"--p-steps", "10000",  # The number of rarefaction depths to include between min_depth and max_depth
+	"--p-steps", "5000",  # The number of rarefaction depths to include between min_depth and max_depth
 	"--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # Input filtered feature table
 	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  #  Input phylogeny for phylogenetic metrics
 	"--o-visualization", os.path.join(diversityAnalysis, "rarefaction_curves_perSample.qzv"),  # Output visualisation
@@ -385,22 +376,22 @@ def phylogenetic_diversity_analysis():
 	subprocess.run(perSampleRarefactionCurvesAnalysis, shell=True)
 	export(os.path.join(diversityAnalysis, "rarefaction_curves_perSample.qzv"))
 
-	# """ Common alpha and beta-diversity metrics and ordination plots (such as PCoA plots for weighted UniFrac distances) 
-	# This command will also rarefy all samples to the sample sequencing depth before calculating these metrics 
-	# (X is a placeholder for the lowest reasonable sample depth; samples with depth below this cut-off will be excluded) """
-	# print("Calculate multiple diversity metrics: in progress ..")
-	# diversityMetrics =	' '.join([
-	# "qiime diversity core-metrics-phylogenetic",  # Calling qiime 2diversity core-metrics-phylogenetic function
-	# "--m-metadata-file", args.metadata,  # Metadata file
-	# "--quiet",  # Silence output if execution is successful
-	# "--p-n-jobs", str(args.threads), # The number of CPUs to be used for the computation
-	# "--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
-	# "--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # The input filtered feature table
-	# "--p-sampling-depth", "79900",  # The total frequency that each sample should be rarefied to prior to computing diversity metrics
-	# "--output-dir", os.path.join(diversityAnalysis, "core_metrics_results"),  # Output directory that will host the core metrics
-	# "2>>", os.path.join(reportsDir, "qiime2_diversityMetrics_report.txt")])  # Output diversityMetrics report
-	# subprocess.run(diversityMetrics, shell=True)
-	# export(os.path.join(diversityAnalysis, "core_metrics_results"))
+	""" Common alpha and beta-diversity metrics and ordination plots (such as PCoA plots for weighted UniFrac distances) 
+	This command will also rarefy all samples to the sample sequencing depth before calculating these metrics 
+	(X is a placeholder for the lowest reasonable sample depth; samples with depth below this cut-off will be excluded) """
+	print("Calculate multiple diversity metrics: in progress ..")
+	diversityMetrics =	' '.join([
+	"qiime diversity core-metrics-phylogenetic",  # Calling qiime 2diversity core-metrics-phylogenetic function
+	"--m-metadata-file", args.metadata,  # Metadata file
+	"--quiet",  # Silence output if execution is successful
+	"--p-n-jobs", str(args.threads), # The number of CPUs to be used for the computation
+	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
+	"--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # The input filtered feature table
+	"--p-sampling-depth", "79900",  # The total frequency that each sample should be rarefied to prior to computing diversity metrics
+	"--output-dir", os.path.join(diversityAnalysis, "core_metrics_results"),  # Output directory that will host the core metrics
+	"2>>", os.path.join(reportsDir, "qiime2_diversityMetrics_report.txt")])  # Output diversityMetrics report
+	subprocess.run(diversityMetrics, shell=True)
+	export(os.path.join(diversityAnalysis, "core_metrics_results"))
 	return 
 
 def taxonomic_assignemnet():
@@ -408,6 +399,7 @@ def taxonomic_assignemnet():
 	and classify the representative sequences from the input dataset """
 	# Importing SILVA reference taxonomy sequences
 	if not os.path.exists(taxinomicAnalysis): os.makedirs(taxinomicAnalysis)  # Creating the directory which will host the analysis
+
 
 	# print("Importing the reference sequences and the corresponding taxonomic classifications of SILVA123 database: in progress ..")
 	# importSilvaReference = ' '.join([
@@ -428,10 +420,10 @@ def taxonomic_assignemnet():
 	# "2>>", os.path.join(reportsDir, "qiime2_importSilvaReference_report.txt")])  # Output importSilvaRefTaxonomy report
 	# subprocess.run(importSilvaRefTaxonomy, shell=True)
 
-	# """ It has been shown that taxonomic classification accuracy of 16S rRNA gene sequences 
-	# improves when a Naive Bayes classifier is trained on only the region of the target 
-	# sequences that was sequenced. Here we will extract the reference sequences. """
-	# # Extract sequencing-like reads from a reference database
+	""" It has been shown that taxonomic classification accuracy of 16S rRNA gene sequences 
+	improves when a Naive Bayes classifier is trained on only the region of the target 
+	sequences that was sequenced. Here we will extract the reference sequences. """
+	# Extract sequencing-like reads from a reference database
 	# print("Extract sequencing-like reads from the reference database: in progress ..")
 	# extractRefReads = ' '.join([
 	# "qiime feature-classifier extract-reads",
@@ -444,8 +436,8 @@ def taxonomic_assignemnet():
 	# "2>>", os.path.join(reportsDir, "qiime2_importSilvaReference_report.txt")])  # Output extractRefReads report
 	# subprocess.run(extractRefReads, shell=True)
 
-	# """ We can now train a Naive Bayes classifier as follows, using 
-	# the reference reads and taxonomy that we just created """
+	""" We can now train a Naive Bayes classifier as follows, using 
+	the reference reads and taxonomy that we just created """
 	# print("Training the Naive Bayes classifier using the reference reads: in progress ..")
 	# trainClassifier = ' '.join([
 	# "qiime feature-classifier fit-classifier-naive-bayes",
@@ -575,18 +567,18 @@ def main():
 	## Preprocessing of the input data
 	# Performing quality trimming and 
 	# removal of all primers on both reads
-	# for i, read in enumerate(pairedReads, 1):
-	# 	QualityTrimming_primerRemoval(read[0], read[1], i, totNum) 
+	for i, read in enumerate(pairedReads, 1):
+		QualityTrimming_primerRemoval(read[0], read[1], i, totNum) 
 
-	# quality_control()  # Checking the quality of the merged reads
+	quality_control()  # Checking the quality of the merged reads
 
-	# ## OTU analysis 
-	# otu_mainAnalysis()  # This function hosts the main otu analysis
+	## OTU analysis 
+	otu_mainAnalysis()  # This function hosts the main otu analysis
 	
 	## Downstream analysis
 	phylogenetic_diversity_analysis()
 	
-	# taxonomic_assignemnet()
+	taxonomic_assignemnet()
 
 	
 
