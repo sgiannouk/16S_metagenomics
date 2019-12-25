@@ -15,6 +15,7 @@
 __version__ = "0.1.1"
 
 import argparse
+import operator
 from Bio import SeqIO
 import subprocess, gzip
 from Bio.Seq import Seq
@@ -46,7 +47,7 @@ parser.add_argument('-a', '--analysis_type', default='16S', choices=['16S', 'ITS
                 	help="Type of analysis to be performed. Bacteria analysis(16S) or Fungi analysis (ITS).")
 
 # Number of threads/CPUs to be used
-parser.add_argument('-th', '--threads', dest='threads', default=30, metavar='', 
+parser.add_argument('-th', '--threads', dest='threads', default=40, metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Number of threads/CPUs to be used
 parser.add_argument('-fp', '--forwardPrimer', default="CCTACGGGNGGCWGCAG", required=False, metavar='', 
@@ -79,14 +80,13 @@ args.input_dir = inputDir
 
 # Main folder hosting the analysis
 analysisDir = os.path.join(args.output_dir if args.output_dir else os.getcwd(), "batch2_analysis")
-# Main subdirectories
 reportsDir = os.path.join(analysisDir, "reports")  # Reports directory
-qiimeDir = os.path.join(analysisDir, "qiime2_analysis")  # Directory hosting the main analysis 
 preprocessedFiles = os.path.join(analysisDir, "preprocessed_files")  # Save processed .fastq files
-qiimeResults = os.path.join(qiimeDir, "denoising_analysis")
-diversityAnalysis = os.path.join(qiimeDir, "diversity_analysis")
+qiimeResults = os.path.join(analysisDir, "denoising_analysis")
+diversityAnalysis = os.path.join(analysisDir, "diversity_analysis")
 statisticalAnalysis = os.path.join(diversityAnalysis, "statistical_analysis")
-taxinomicAnalysis = os.path.join(qiimeDir, "taxinomic_analysis")
+taxinomicAnalysis = os.path.join(analysisDir, "taxinomic_analysis")
+abundanceAnalysis = os.path.join(analysisDir, "differential_abundance_analysis")
 preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
 
 
@@ -140,10 +140,11 @@ def primer_removal(forwardRead, reverseRead, i, totNum):
 	"rcomp=t",  # Look for reverse-complements of kmers in addition to forward kmers
 	"copyundefined=t",  # Process non-AGCT IUPAC reference bases by making all possible unambiguous copies.
 	"ktrim=l",  # Trim to the left of reads to remove bases matching reference kmers
-	"trimq=20",  # Regions with average quality BELOW this will be trimmed
+	"trimq=18",  # Regions with average quality BELOW this will be trimmed
 	"qtrim=r",  # Trim read ends (left end only) to remove bases with quality below trimq
+	"maq={0}".format(20),  # Reads with average quality (after trimming) below this will be discarded (20)
 	"2>>", os.path.join(preprocessingReports, "bbduk_report.log")])  # Output trimming report
-	print(bbduk, file=open(os.path.join(preprocessingReports, "bbduk_report.log"),"a"))
+	print("\n\n", file=open(os.path.join(preprocessingReports, "bbduk_report.log"),"a"))
 	subprocess.run(bbduk, shell=True)
 	return 
 
@@ -212,7 +213,6 @@ def quality_control():
 def qiime2_analysis():
 	print("\n\t{0} QIIME2 ANALYSIS".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 
-	if not os.path.exists(qiimeDir): os.makedirs(qiimeDir)  # Creating the "qiime2_analysis" directory
 	""" Importing and denoising the preprocessed PE reads """
 	print("{0} Importing the preprocessed reads to the Qiime2 Artifact: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 	importingSamplesToQiime2 =	' '.join([
@@ -220,7 +220,7 @@ def qiime2_analysis():
 	"--type", "\'SampleData[PairedEndSequencesWithQuality]\'",  # The semantic type of the artifact that will be created upon importing
 	"--input-format", "CasavaOneEightSingleLanePerSampleDirFmt",
 	"--input-path", preprocessedFiles,  # Path to the directory that should be imported
-	"--output-path", os.path.join(qiimeDir, "input_data.qza"),  # Path where output artifact should be written
+	"--output-path", os.path.join(analysisDir, "input_data.qza"),  # Path where output artifact should be written
 	"2>>", os.path.join(reportsDir, "qiime2_importingData_report.log")])  # Output denoising report
 	subprocess.run(importingSamplesToQiime2, shell=True)
 
@@ -228,11 +228,11 @@ def qiime2_analysis():
 	importSamplesQC =	' '.join([
 	"qiime demux summarize",  # Calling qiime demux summarize to quality of each sample
 	"--quiet",  # Silence output if execution is successful
-	"--i-data", os.path.join(qiimeDir, "input_data.qza"),  # Path where the input artifact is written
-	"--o-visualization", os.path.join(qiimeDir, "inputData_QC.qzv"),  # Output reports
+	"--i-data", os.path.join(analysisDir, "input_data.qza"),  # Path where the input artifact is written
+	"--o-visualization", os.path.join(analysisDir, "inputData_QC.qzv"),  # Output reports
 	"2>>", os.path.join(reportsDir, "qiime2_importSamplesQC_report.log")])  # Output importSamplesQC report
 	subprocess.run(importSamplesQC, shell=True)
-	export(os.path.join(qiimeDir, "inputData_QC.qzv"))
+	export(os.path.join(analysisDir, "inputData_QC.qzv"))
 
 	""" Denoising is an attempt to correct reads with sequencing errors and then 
 	remove chimeric sequences originating from different DNA templates. """
@@ -244,7 +244,7 @@ def qiime2_analysis():
 	"--p-trunc-len-f", "0",  # No truncation will be performed cause we have already trimmed low quality ends
 	"--p-trunc-len-r", "0",  # No truncation will be performed cause we have already trimmed low quality ends
 	"--output-dir", qiimeResults,  # Output results to a directory
-	"--i-demultiplexed-seqs", os.path.join(qiimeDir, "input_data.qza"),  # The paired-end demultiplexed sequences to be denoised
+	"--i-demultiplexed-seqs", os.path.join(analysisDir, "input_data.qza"),  # The paired-end demultiplexed sequences to be denoised
 	"2>>", os.path.join(reportsDir, "dada2_denoising_report.log")])  # Output denoising report
 	subprocess.run(denoisingNmerging, shell=True)
 
@@ -355,9 +355,8 @@ def phylogenetic_diversity_analysis():
 	rarefactionCurvesAnalysis =	' '.join([
 	"qiime diversity alpha-rarefaction",  # Calling qiime2 diversity alpha-rarefaction function
 	"--quiet",  # Silence output if execution is successful
-	# "--p-max-depth", "79900",  # The maximum rarefaction depth
-	"--p-max-depth", "258000",  # The maximum rarefaction depth
-	"--p-steps", "5000",  # The number of rarefaction depths to include between min_depth and max_depth
+	"--p-max-depth", max_depth_and_steps_thresholds[0],  # The maximum rarefaction depth
+	"--p-steps", max_depth_and_steps_thresholds[1],  # The number of rarefaction depths to include between min_depth and max_depth
 	"--m-metadata-file", args.metadata,  # Metadata file
 	"--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # Input filtered feature table
 	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  #  Input phylogeny for phylogenetic metrics
@@ -377,7 +376,7 @@ def phylogenetic_diversity_analysis():
 	"--p-n-jobs", str(args.threads), # The number of CPUs to be used for the computation
 	"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  # The rooted phylogenetic tree
 	"--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # The input filtered feature table
-	"--p-sampling-depth", "79900",  # The total frequency that each sample should be rarefied to prior to computing diversity metrics
+	"--p-sampling-depth", max_depth_and_steps_thresholds[0],  # The total frequency that each sample should be rarefied to prior to computing diversity metrics
 	"--output-dir", os.path.join(diversityAnalysis, "core_metrics_results"),  # Output directory that will host the core metrics
 	"2>>", os.path.join(reportsDir, "qiime2_diversityMetrics_report.log")])  # Output diversityMetrics report
 	subprocess.run(diversityMetrics, shell=True)
@@ -457,7 +456,6 @@ def taxonomic_assignmnet():
 	# Importing SILVA reference taxonomy sequences
 	if not os.path.exists(taxinomicAnalysis): os.makedirs(taxinomicAnalysis)  # Creating the directory which will host the analysis
 
-
 	# print("Importing the reference sequences and the corresponding taxonomic classifications of SILVA123 database: in progress ..")
 	# importSilvaReference = ' '.join([
 	# "qiime tools import",  # Import function
@@ -477,10 +475,10 @@ def taxonomic_assignmnet():
 	# "2>>", os.path.join(reportsDir, "qiime2_importSilvaReference_report.log")])  # Output importSilvaRefTaxonomy report
 	# subprocess.run(importSilvaRefTaxonomy, shell=True)
 
-	""" It has been shown that taxonomic classification accuracy of 16S rRNA gene sequences 
-	improves when a Naive Bayes classifier is trained on only the region of the target 
-	sequences that was sequenced. Here we will extract the reference sequences. """
-	# Extract sequencing-like reads from a reference database
+	# """ It has been shown that taxonomic classification accuracy of 16S rRNA gene sequences 
+	# improves when a Naive Bayes classifier is trained on only the region of the target 
+	# sequences that was sequenced. Here we will extract the reference sequences. """
+	# # Extract sequencing-like reads from a reference database
 	# print("Extract sequencing-like reads from the reference database: in progress ..")
 	# extractRefReads = ' '.join([
 	# "qiime feature-classifier extract-reads",
@@ -493,8 +491,8 @@ def taxonomic_assignmnet():
 	# "2>>", os.path.join(reportsDir, "qiime2_importSilvaReference_report.log")])  # Output extractRefReads report
 	# subprocess.run(extractRefReads, shell=True)
 
-	""" We can now train a Naive Bayes classifier as follows, using 
-	the reference reads and taxonomy that we just created """
+	# """ We can now train a Naive Bayes classifier as follows, using 
+	# the reference reads and taxonomy that we just created """
 	# print("Training the Naive Bayes classifier using the reference reads: in progress ..")
 	# trainClassifier = ' '.join([
 	# "qiime feature-classifier fit-classifier-naive-bayes",
@@ -505,6 +503,7 @@ def taxonomic_assignmnet():
 	# "2>>", os.path.join(reportsDir, "qiime2_trainClassifier_report.log")])  # Output trainClassifier report
 	# subprocess.run(trainClassifier, shell=True)
 	# export(os.path.join(taxinomicAnalysis, "classifier.qza"))
+
 
 	""" Assign the taxonomy """
 	print("Assign the taxonomy: in progress ..")
@@ -539,30 +538,44 @@ def taxonomic_assignmnet():
 	"2>>", os.path.join(reportsDir, "qiime2_barplotOfTaxonomy_report.log")])  # Output barplotOfTaxonomy report
 	subprocess.run(barplotOfTaxonomy, shell=True)
 	export(os.path.join(taxinomicAnalysis, "taxonomy_barplot.qzv"))
-	summarisation()
 	return
 
 def differential_abundance():
+	""" Following the tutorial for ANCOM, we want to collapse the table to genus level. 
+	Before this, we will filter out low-abundance features. First we will removing those 
+	that only appear 10 times or fewer across all samples, as well as those that only 
+	appear in one sample """
 
-	# Filter out the samples with less than 2319 reads (in the case of the 18S rRNA data)
-	# qiime feature-table filter-samples \
-	# --i-table feature_table_samples_filtered.qza \
-	# --p-min-frequency 2319 \
-	# --o-filtered-table temp.qza
+	if not os.path.exists(abundanceAnalysis): os.makedirs(abundanceAnalysis)  # Creating the "qiime2_analysis" directory
+	
+	""" Applying basic filters to the features """
+	print("{0} Applying basic filters to discard low frequent features: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+	filteringFeatures = ' '.join([
+	"qiime feature-table filter-features",  # Calling qiime2 feature-table filter-features function
+	"--quiet",  # Silence output if execution is successful
+	"--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # Input feature table to be summarized
+	"--p-min-frequency 10",  # Least frequency that a feature must have to be retained
+	"--p-min-samples 2",  # The minimum number of samples that a feature must be observed in to be retained
+	"--o-filtered-table", os.path.join(abundanceAnalysis, "feature_table_further_filtered.qza"),  # Output file
+	"2>>", os.path.join(reportsDir, "qiime2_filteringFeatures_report.log")])  # Output denoising report
+	subprocess.run(filteringFeatures, shell=True)
 
-	# # Filter features that only appear in a single sample
-	# qiime feature-table filter-features \
-	# --i-table temp.qza \
-	# --p-min-samples 2 \
-	# --o-filtered-table temp2.qza
 
-	# # Filter features by reads
-	# qiime feature-table filter-features \
-	# --i-table temp2.qza \
-	# --p-min-frequency 10 \
-	# --o-filtered-table temp3.qza
+	""" Applying basic filters to the features """
+	print("{0} Applying basic filters to discard low frequent features: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+	filteringFeatures = ' '.join([
+	"qiime feature-table filter-features",  # Calling qiime2 feature-table filter-features function
+	"--quiet",  # Silence output if execution is successful
+	"--i-table", os.path.join(qiimeResults, "feature_table_filtered.qza"),  # Input feature table to be summarized
+	"--p-min-frequency 10",  # Least frequency that a feature must have to be retained
+	"--p-min-samples 2",  # The minimum number of samples that a feature must be observed in to be retained
+	"--o-filtered-table", os.path.join(abundanceAnalysis, "feature_table_further_filtered.qza"),  # Output file
+	"2>>", os.path.join(reportsDir, "qiime2_filteringFeatures_report.log")])  # Output denoising report
+	subprocess.run(filteringFeatures, shell=True)
+	
 
-	# mkdir ANCOM
+
+
 
 	# # Collapse table at genus level
 	# qiime taxa collapse \
@@ -571,11 +584,6 @@ def differential_abundance():
 	# --p-level 6 \
 	# --o-collapsed-table ANCOM/feature_table_for_ANCOM.qza
 
-	# rm temp.qza
-	# rm temp2.qza
-	# rm temp3.qza
-
-	# cd ANCOM
 
 	# # Add pseudocount
 	# qiime composition add-pseudocount \
@@ -650,19 +658,31 @@ def freqTheshold(exportFile):
 	cut_off = str(int(mean_freq * 0.001))
 	return cut_off
 
-def maxDepthNpStepsThresholds():
+def max_depth_and_steps_thresholds():
 	""" Calculating the maximum depth and step for the rarefraction experiment"""
 	depth_file = os.path.join(qiimeResults, "feature_table_filtered/sample-frequency-detail.csv")
 	if not os.path.exists(depth_file):
 		sys.exit("The file \"{0}\" does NOT exist...").format(depth_file)
 
-	depths = []
+	depths = {}
 	with open(depth_file) as fin:
 		for line in fin:
-			depths.append(line.split(",")[1].strip())
-	print(depths)
-
-	return
+			depths[line.split(",")[0].strip()] = int(float(line.split(",")[1].strip()))
+	
+	# Ordering dictionary by decreasing value
+	depths = sorted(depths.items(), key = operator.itemgetter(1), reverse = True)
+	
+	# if "neg" in depths[-1][0].lower():
+	# 	if "neg" in depths[-2][0].lower():
+	# 		max_depth = depths[-3][1]
+	# 	else:
+	# 		max_depth = depths[-2][1]
+	# else:
+	# 	max_depth = depths[-1][1]
+	
+	max_depth = str(depths[-1][1])
+	steps = str(int(float(max_depth)/50))
+	return(max_depth, steps)
 
 def export(exportFile):
 	if os.path.isfile(exportFile):
@@ -672,7 +692,9 @@ def export(exportFile):
 			for files in folder:
 				file = os.path.join(path, files)
 				subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(file, file[:-4]), shell=True)
-			
+
+	if exportFile.endswith(".qvz"):
+		os.system('rm {0}'.format(exportFile))	
 	return 
 
 def summarisation():
@@ -683,6 +705,9 @@ def summarisation():
 			if os.stat(file).st_size == 0:  
 				print("Removing:\t", file)  
 				os.remove(file)
+			elif file.endswith("input_data.qza"):
+				print("Removing:\t", file)
+				os.remove(file)
 	return 
 
 def main():
@@ -691,24 +716,24 @@ def main():
 	# Obtaining the number of pair files
 	totNum = len(pairedReads)
 
-	### Preprocessing of the input data
-	# Performing quality trimming and removal of all primers on both reads
-	print("\t{0} PREPROCESSING THE INPUT SAMPLES".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-	for i, read in enumerate(pairedReads, 1):
-		primer_removal(read[0], read[1], i, totNum) 
+	# ### Preprocessing of the input data
+	# # Performing quality trimming and removal of all primers on both reads
+	# print("\t{0} PREPROCESSING THE INPUT SAMPLES".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+	# for i, read in enumerate(pairedReads, 1):
+	# 	primer_removal(read[0], read[1], i, totNum) 
 
-	quality_control()  # Checking the quality of the merged reads
+	# quality_control()  # Checking the quality of the merged reads
 
-	### Qiime2 analysis 
-	qiime2_analysis()
+	# ### Qiime2 analysis 
+	# qiime2_analysis()
 	
-	## Downstream analysis
+	# ## Downstream analysis
 	# phylogenetic_diversity_analysis()
 	
 	# taxonomic_assignmnet()
 
-	# differential_abundance()
+	differential_abundance()
 
-	
+	# summarisation()
 
 if __name__ == "__main__": main()
