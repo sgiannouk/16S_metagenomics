@@ -5,8 +5,7 @@
 
 # To activate this environment, use
 #
-#     $ conda activate /opt/anaconda3/envs/qiime2
-#     $ conda activate /home/stavros/anaconda3/envs/qiime2
+#     $ conda activate qiime2
 #
 # To deactivate an active environment, use
 #
@@ -37,7 +36,7 @@ silva_99_classifier = "/home/stavros/playground/progs/16S_subsidiary_files/silva
 # Tracking time of analysis
 start_time = datetime.now()
 
-usage = "otu_classification [options] -i <input_directory/input_files>"
+usage = "asv_classification [options] -i <input_directory/input_files>"
 epilog = " -- January 2019 | Stavros Giannoukakos -- "
 description = "DESCRIPTION"
 
@@ -84,14 +83,15 @@ args.metadata = metadata_file
 args.input_dir = inputDir
 
 # Main folder hosting the analysis
-analysisDir = os.path.join(args.output_dir if args.output_dir else os.getcwd(), "batch2_analysis_NEW")
+# analysisDir = os.path.join(args.output_dir if args.output_dir else os.getcwd(), "batch2_analysis")
+analysisDir = os.path.join(args.output_dir if args.output_dir else os.getcwd(), "TEST")
 reportsDir = os.path.join(analysisDir, "reports")  # Reports directory
 preprocessedFiles = os.path.join(analysisDir, "preprocessed_files")  # Save processed .fastq files
 qiimeResults = os.path.join(analysisDir, "denoising_analysis")
 diversityAnalysis = os.path.join(analysisDir, "diversity_analysis")
 statisticalAnalysis = os.path.join(diversityAnalysis, "statistical_analysis")
 adonisAnalysis = os.path.join(diversityAnalysis, "adonis_analysis")
-taxinomicAnalysis = os.path.join(analysisDir, "taxinomic_analysis")
+taxinomicAnalysis = os.path.join(analysisDir, "taxonomic_analysis")
 abundanceAnalysis = os.path.join(analysisDir, "differential_abundance_analysis")
 preprocessingReports = os.path.join(reportsDir, "preprocessing_reports")
 biplots = os.path.join(analysisDir, "PCoA_biplot_analysis")
@@ -181,7 +181,7 @@ def primer_removal(forwardRead, reverseRead, i, totNum):
 	""" An initial very mild base quality trimming will be performed. In this step, we are trying to 
 	discard very troublesome bases (whos quality is below Q20). That way we remove obvious trash and 
 	trying to improve the chances of a proper merge. """
-
+	[os.makedirs(files) for files in [preprocessedFiles, preprocessingReports] if not os.path.exists(files)]  # Generation of the directories
 	forwardRead_output = os.path.join(preprocessedFiles, os.path.basename(forwardRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
 						 if forwardRead.endswith(x)][0], ".fastq.gz"))
 	reverseRead_output = os.path.join(preprocessedFiles, os.path.basename(reverseRead).replace([x for x in [".fastq.gz", ".fq.gz"]\
@@ -191,6 +191,8 @@ def primer_removal(forwardRead, reverseRead, i, totNum):
 
 	print("{0}/{1}. BBDUK - Quality filtering and primer trimming of {2}".format(i, totNum, sample_name))
 	# Calculating the minimum and maximum acceptable length after primer and quality trimming
+	# The thresholds have been chosen based on https://doi.org/10.1186/s12859-019-3187-5
+	# FYI the average length of V3-V4 is 443bp
 	minlength, maxlength = calculateMinMax(forwardRead)
 	bbduk = ' '.join([
 	"/home/stavros/playground/progs/anaconda3/bin/bbduk.sh",  # Call BBDuck (BBTools) to preprocess the raw data
@@ -291,7 +293,7 @@ def taxonomic_assignmnet():
 		"qiime tools import",  # Import function
 		"--type", "\'FeatureData[Sequence]\'",  # Type of imported data
 	  	"--input-path", silva_reference,  # Input SILVA 132 database
-	  	"--output-path", os.path.join(taxinomicAnalysis, "silva132_99_OTUs.qza"),  # Output file
+	  	"--output-path", os.path.join(taxinomicAnalysis, "silva132_99_ASVs.qza"),  # Output file
 	  	"2>>", os.path.join(reportsDir, "qiime2_importSilvaReference_report.log")])  # Output importSilvaReference report
 		subprocess.run(importSilvaReference, shell=True)
 
@@ -301,7 +303,7 @@ def taxonomic_assignmnet():
 		"--type", "\'FeatureData[Taxonomy]\'",  # Type of imported data
 		"--input-format", "HeaderlessTSVTaxonomyFormat",  # Type of input file
 	  	"--input-path", silva_taxinomy,  # Input annotation file
-	  	"--output-path", os.path.join(taxinomicAnalysis, "silva132_99_OTU_taxonomy.qza"),  # Output artifact 
+	  	"--output-path", os.path.join(taxinomicAnalysis, "silva132_99_ASV_taxonomy.qza"),  # Output artifact 
 		"2>>", os.path.join(reportsDir, "qiime2_importSilvaReference_report.log")])  # Output importSilvaRefTaxonomy report
 		subprocess.run(importSilvaRefTaxonomy, shell=True)
 
@@ -316,7 +318,7 @@ def taxonomic_assignmnet():
 		"--p-trunc-len", "466",  # Minimum amplicon length
 		"--p-f-primer", args.forwardPrimer,  # Forward primer sequence
 		"--p-r-primer", args.reversePrimer,  # Reverse primer sequence
-		"--i-sequences", os.path.join(taxinomicAnalysis, "silva132_99_OTUs.qza"),  # Input reference seq artifact
+		"--i-sequences", os.path.join(taxinomicAnalysis, "silva132_99_ASVs.qza"),  # Input reference seq artifact
 		"--o-reads", os.path.join(taxinomicAnalysis, "silva132_reference_sequences.qza"),  # Output ref sequencing-like reads
 		"2>>", os.path.join(reportsDir, "qiime2_importSilvaReference_report.log")])  # Output extractRefReads report
 		subprocess.run(extractRefReads, shell=True)
@@ -328,18 +330,18 @@ def taxonomic_assignmnet():
 		"qiime feature-classifier fit-classifier-naive-bayes",
 		"--quiet",  # Silence output if execution is successful
 		"--i-reference-reads", os.path.join(taxinomicAnalysis, "silva132_reference_sequences.qza"),
-		"--i-reference-taxonomy", os.path.join(taxinomicAnalysis, "silva132_99_OTU_taxonomy.qza"),
+		"--i-reference-taxonomy", os.path.join(taxinomicAnalysis, "silva132_99_ASV_taxonomy.qza"),
 		"--o-classifier", silva_99_classifier, 
 		"2>>", os.path.join(reportsDir, "qiime2_trainClassifier_report.log")])  # Output trainClassifier report
 		subprocess.run(trainClassifier, shell=True)
 		export(os.path.join(taxinomicAnalysis, "classifier.qza"))
 		# Deleting secondry unnecessary files
-		os.system("rm {0} {1}".format(os.path.join(taxinomicAnalysis, "silva132_99_OTUs.qza"),\
-									  os.path.join(taxinomicAnalysis, "silva132_99_OTU_taxonomy.qza"),\
+		os.system("rm {0} {1}".format(os.path.join(taxinomicAnalysis, "silva132_99_ASVs.qza"),\
+									  os.path.join(taxinomicAnalysis, "silva132_99_ASV_taxonomy.qza"),\
 									  os.path.join(taxinomicAnalysis, "silva132_reference_sequences.qza")))
-		
+	
 	""" Assign the taxonomy """
-	print("Assigning the taxonomy to each ASV: in progress ..")
+	print("{0}  Assigning the taxonomy to each ASV: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 	assignTaxonomy = ' '.join([
 	"qiime feature-classifier classify-sklearn",
 	"--quiet",  # Silence output if execution is successful
@@ -359,16 +361,18 @@ def taxonomic_assignmnet():
 	subprocess.run(outputClassifications, shell=True)
 	export(os.path.join(taxinomicAnalysis, "taxonomic_classification.qzv"))
 
-	# Filtering out any samples with fewer features than our rarefaction threshold
+	# Filtering out any features with less than X counts
+	min_frequency = min_freq()
+	print("{0}  Filtering out any features with less than {1} counts: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M"), min_frequency))
 	filter_feature_table = ' '.join([
-	"qiime feature-table filter-samples",
-	"--p-min-frequency", min_depth()[0], 
+	"qiime feature-table filter-features",
+	"--p-min-frequency", min_frequency,  # Minimum frequency that a feature must have to be retained
 	"--i-table", os.path.join(qiimeResults, "table.qza"),
 	"--o-filtered-table", os.path.join(qiimeResults, "table_filtered.qza"),
 	"2>>", os.path.join(reportsDir, "qiime2_filter_feature_table_report.log")])
 	subprocess.run(filter_feature_table, shell=True)
 
-	print("Generating a barplot: in progress ..")
+	print("{0}  Generating the taxonimic barplot: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 	barplotOfTaxonomy = ' '.join([
 	"qiime taxa barplot", 
 	"--quiet",  # Silence output if execution is successful
@@ -380,32 +384,6 @@ def taxonomic_assignmnet():
 	subprocess.run(barplotOfTaxonomy, shell=True)
 	export(os.path.join(taxinomicAnalysis, "taxonomy_barplot.qzv"))
 	return
-
-def min_depth():
-		""" Calculating the maximum depth and step for the rarefraction experiment"""
-		depth_file = os.path.join(qiimeResults, "feature_table/sample-frequency-detail.csv")
-		if not os.path.exists(depth_file):
-			sys.exit("The file {0} does NOT exist...".format(depth_file))
-
-		depths = {}
-		with open(depth_file) as fin:
-			for line in fin:
-				depths[line.split(",")[0].strip()] = int(float(line.split(",")[1].strip()))
-		
-		# Ordering dictionary by decreasing value
-		depths = sorted(depths.items(), key = operator.itemgetter(1), reverse = True)
-		
-		# if "neg" in depths[-1][0].lower():
-		# 	if "neg" in depths[-2][0].lower():
-		# 		min_d = depths[-3][1]
-		# 	else:
-		# 		min_d = depths[-2][1]
-		# else:
-		# 	min_d = depths[-1][1]
-		
-		min_d = str(depths[-1][1])
-		steps = str(int(float(min_d)/50))
-		return(min_d, steps)
 
 class phylogenetics():
 	def __init__(self, threads, metadata):
@@ -419,6 +397,7 @@ class phylogenetics():
 		if not os.path.exists(statisticalAnalysis): os.makedirs(statisticalAnalysis)
 		if not os.path.exists(adonisAnalysis): os.makedirs(adonisAnalysis)
 		self.phylogenetic_tree(threads)
+		self.rarefication()
 		self.alpha_rarefaction(metadata)
 		self.core_diversity_analysis(threads, metadata)
 		self.alpha_diversity_analysis(metadata)
@@ -467,6 +446,18 @@ class phylogenetics():
 		subprocess.run(phylogeneticDiversityAnalysis, shell=True)
 		return
 
+	def rarefication(self):
+		print("{0} Performing random subsampling ({0}): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M"), min_depth()[0]))
+		randomSubsampling = ' '.join([
+		"qiime feature-table subsample",  # Calling qiime2 feature-table subsample
+		"--i-table", os.path.join(qiimeResults, "table.qza"),  # The feature table to be subsampled
+		"--p-axis", "\'feature\'",  # A random set of features will be selected to be retained
+		"--p-subsampling-depth", min_depth()[0],  # The total number of features to be randomly sampled
+		"--o-sampled-table", os.path.join(qiimeResults, "subsampled_table.qza"),  # Output results 
+		"2>>", os.path.join(preprocessingReports, "qiime2_randomSubsampling_report.log")])  # Output randomSubsampling report
+		subprocess.run(randomSubsampling, shell=True)
+		return
+
 	def alpha_rarefaction(self, metadata):
 		""" A key quality control step is to plot rarefaction curves for all 
 		the samples to determine if performed sufficient sequencing """
@@ -476,8 +467,7 @@ class phylogenetics():
 		"qiime diversity alpha-rarefaction",  # Calling qiime2 diversity alpha-rarefaction function
 		"--quiet",  # Silence output if execution is successful
 		"--p-max-depth", self.max_depth_and_steps_thresholds()[0],  # The maximum rarefaction depth
-		# "--p-steps", self.max_depth_and_steps_thresholds()[1],  # The number of rarefaction depths to include between min_depth and min_depth
-		"--p-steps 50",
+		"--p-steps 40",
 		"--m-metadata-file", metadata,  # Metadata file
 		"--i-table", os.path.join(qiimeResults, "table.qza"),  # Input feature table
 		"--i-phylogeny", os.path.join(diversityAnalysis, "rooted_tree.qza"),  #  Input phylogeny for phylogenetic metrics
@@ -684,15 +674,13 @@ def calculateMinMax(forwardRead):
 	max_readLength = (read_length * 2) - (primers_averageLength * 2)
 	return (min_readLength, max_readLength)
 
-def freqTheshold(exportFile):
+def min_freq():
 	""" Based on the summary we will calculate a cut-off for how frequent a variant needs to be for it to be retained. 
-	We will remove all ASVs that have a frequency of less than 0.1% of the mean sample depth. This cut-off excludes 
-	ASVs that are likely due to MiSeq bleed-through between runs (reported by Illumina to be 0.1% of reads). """
+	We will remove all ASVs that have a frequency of less than 0.0001% of the mean sample depth. This cut-off excludes """
+	exportFile = os.path.join(qiimeResults, "feature_table.qzv")
 	if not os.path.exists(exportFile[:-4]):
 		subprocess.run("qiime tools export --input-path {0} --output-path {1}".format(exportFile, exportFile[:-4]), shell=True)
 
-	# Calculating the mean frequency and the min cut-off for excluding ASVs that are likely 
-	# due to MiSeq bleed-through between runs (reported by Illumina to be 0.1% of reads)
 	mean_freq = 0
 	for path, subdir, folder in os.walk(exportFile[:-4]):
 		for name in folder:
@@ -706,7 +694,7 @@ def freqTheshold(exportFile):
 				mean_freq = mean_freq/samples
 
 	# Calculation of the cut-off point
-	cut_off = str(int(mean_freq * 0.001))
+	cut_off = str(int(mean_freq * 0.0001))
 	return cut_off
 
 def export(exportFile):
@@ -756,7 +744,7 @@ def main():
 	# Obtaining the number of pair files
 	totNum = len(pairedReads)
 
-	quality_control()  # Checking the quality of the merged reads
+	# quality_control()  # Checking the quality of the reads
 
 	### Preprocessing of the input data
 	# Performing quality trimming and removal of all primers on both reads
@@ -768,9 +756,9 @@ def main():
 	# qiime2_analysis()
 	
 	# ## Downstream analysis
-	# phylogenetics(args.threads, args.metadata)
-
 	# taxonomic_assignmnet()
+
+	# phylogenetics(args.threads, args.metadata)
 
 	# differential_abundance()
 
